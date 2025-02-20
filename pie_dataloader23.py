@@ -1,7 +1,7 @@
 import torch
 import torch.utils.data as data
 import os
-import pickle5 as pk
+import pickle as pk
 import matplotlib.pyplot as plt
 from pathlib import Path
 import numpy as np
