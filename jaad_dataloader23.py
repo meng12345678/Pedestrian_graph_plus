@@ -1,7 +1,7 @@
 import torch
 import torch.utils.data as data
 import os
-import pickle5 as pk
+import pickle as pk
 from pathlib import Path
 import numpy as np
 from torchvision import transforms as A
