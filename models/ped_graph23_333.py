@@ -22,7 +22,21 @@ class TemporalAttention(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        avg_out = self.avg_pool(x)
+        # 这里假设输入是 4D 张量 (batch_size, channels, time_steps, nodes)
+        # 我们先 reshape 成 3D 张量 (batch_size, channels * nodes, time_steps)
+        N, C, T, V = x.size()
+
+         # 重新调整维度为 (batch_size, channels * nodes, time_steps)
+        x = x.view(N, C * V, T)  # 将输入从 4D 转换为 3D 张量
+        avg_out = self.avg_pool(x)  # 对时间维度进行平均池化
+        avg_out = avg_out.unsqueeze(-1)  # 添加额外的维度，以便后续广播
+     
+        avg_out = avg_out.view(avg_out.shape[0], avg_out.shape[1], 1)  # 变成 [32, 608, 1]
+
+        # 扩展到 (batch_size, channels * nodes, time_steps)
+        avg_out = avg_out.expand_as(x)  # 将池化输出扩展为与输入张量相同的时间维度
+        # 恢复成四维：[batch_size, channels, time_steps, nodes]
+        avg_out = avg_out.reshape(N, C, T, V)
         return self.sigmoid(avg_out)
 
 class ChannelAttention(nn.Module):
