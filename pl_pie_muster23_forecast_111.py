@@ -79,7 +79,7 @@ class LitPedGraph(pl.LightningModule):
         loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
 
         preds = logits.softmax(1).argmax(1)
-        acc = balanced_accuracy_score(preds.view(-1).long().cpu(), y.view(-1).long().cpu(), task='multiclass', num_classes=3)
+        acc = accuracy(preds.view(-1).long(), y.view(-1).long(), task='multiclass', num_classes=3)
         self.log('train_loss', loss, prog_bar=True)
         self.log('train_acc', acc*100.0, prog_bar=True)
         return loss
@@ -99,7 +99,7 @@ class LitPedGraph(pl.LightningModule):
         loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
 
         preds = logits.softmax(1).argmax(1) 
-        acc = balanced_accuracy_score(preds.view(-1).long().cpu(), y.view(-1).long().cpu(), task='multiclass', num_classes=3)
+        acc = accuracy(preds.view(-1).long(), y.view(-1).long(), task='multiclass', num_classes=3)
         self.log('val_loss', loss, prog_bar=True)
         self.log('val_acc', acc*100.0, prog_bar=True)
         return loss
@@ -119,7 +119,7 @@ class LitPedGraph(pl.LightningModule):
         loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
 
         preds = logits.softmax(1).argmax(1)  
-        acc = balanced_accuracy_score(preds.view(-1).long().cpu(), y.view(-1).long().cpu(), task='multiclass', num_classes=3)
+        acc = accuracy(preds.view(-1).long(), y.view(-1).long(), task='multiclass', num_classes=3)
         
         self.log('test_loss', loss, prog_bar=True)
         self.log('test_acc', acc*100.0, prog_bar=True)
