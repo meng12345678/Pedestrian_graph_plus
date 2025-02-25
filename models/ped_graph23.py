@@ -136,7 +136,8 @@ class pedMondel(nn.Module):
         
         self.att_spatial = SpatialAttention(self.ch2)
         self.att_temporal = TemporalAttention(self.ch2)
-        self.att_channel = ChannelAttention(self.ch2)
+        self.att_channel_ch1 = ChannelAttention(self.ch1)  # 32 通道的注意力
+        self.att_channel_ch2 = ChannelAttention(self.ch2)  # 64 通道的注意力
 
         self.linear = nn.Linear(self.ch2, self.n_clss)
         # 定义一个全连接层，用于将特征图的输出映射到最终的分类数 `self.n_clss`。
@@ -177,7 +178,7 @@ class pedMondel(nn.Module):
         # 进行 Spatial Attention, Temporal Attention 和 Channel Attention
         x1 = self.att_spatial(x1) * x1
         x1 = self.att_temporal(x1) * x1
-        x1 = self.att_channel(x1) * x1
+        x1 = self.att_channel_ch1(x1) * x1  # 使用 32 通道的注意力
         # --------------------------
         
         # --------------------------
@@ -191,7 +192,7 @@ class pedMondel(nn.Module):
         # 进行 Spatial Attention, Temporal Attention 和 Channel Attention
         x1 = self.att_spatial(x1) * x1
         x1 = self.att_temporal(x1) * x1
-        x1 = self.att_channel(x1) * x1
+        x1 = self.att_channel_ch2(x1) * x1  # 使用 64 通道的注意力
         # --------------------------
         # x1 = self.l3(x1)
         # if self.frames:
