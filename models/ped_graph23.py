@@ -42,15 +42,36 @@ class TemporalAttention(nn.Module):
 class ChannelAttention(nn.Module):
     def __init__(self, channels):
         super(ChannelAttention, self).__init__()
-        self.fc1 = nn.Linear(channels, channels)
-        self.fc2 = nn.Linear(channels, channels)
+        self.fc1 = nn.Linear(channels, channels)  
+        self.fc2 = nn.Linear(channels, channels)  
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        avg_out = torch.mean(x, dim=(2, 3), keepdim=True)
-        avg_out = avg_out.view(avg_out.size(0), -1)
-        fc_out = self.fc2(self.fc1(avg_out))
-        return self.sigmoid(fc_out).view(-1, avg_out.size(1), 1, 1)    
+        avg_out = torch.mean(x, dim=(2, 3), keepdim=False)  # 对 H 和 W 维度求平均
+        # print("avg_out shape:", avg_out.shape)  # 打印avg_out的形状
+        avg_out = avg_out.view(avg_out.size(0), -1)  # 展平为 (batch_size, channels)
+        # print("avg_out after reshape shape:", avg_out.shape)  # 打印 reshape 后的 avg_out 形状
+        fc_out = self.fc2(self.fc1(avg_out))  # fc1 -> fc2
+
+        # try:
+        #     # 确保fc1的输入输出维度一致
+        #     fc1_out = self.fc1(avg_out)
+        #     print("fc1 output shape:", fc1_out.shape)
+        # except Exception as e:
+        #     print(f"Error in fc1: {e}")
+        #     fc1_out = torch.zeros_like(avg_out)  # 设置默认值，避免后续报错
+
+        # try:
+        #     # fc2的输入和输出维度应与fc1一致
+        #     fc2_out = self.fc2(fc1_out)
+        #     print("fc2 output shape:", fc2_out.shape)
+        # except Exception as e:
+        #     print(f"Error in fc2: {e}")
+        #     fc2_out = torch.zeros_like(fc1_out)  # 设置默认值，避免后续报错
+
+        # return self.sigmoid(fc2_out).view(x.size(0), x.size(1), 1, 1)  # 返回输出
+        
+        return self.sigmoid(fc_out).view(-1, avg_out.size(1), 1, 1)  # 输出形状应该是 (batch_size, channels, 1, 1)
 
 class pedMondel(nn.Module):
     # 初始化方法，接受几个参数：
@@ -86,7 +107,7 @@ class pedMondel(nn.Module):
                 nn.Conv1d(2, self.ch1, 3, bias=False), 
                 nn.BatchNorm1d(self.ch1), nn.SiLU()) # 定义一个1D卷积层，输入通道为2（速度信息x和y），输出通道为self.ch1（32），卷积核大小为3。
         # ----------------------------------------------------------------------------------------------------
-        # 创建一个TCN_GCN_unit（时序卷积 + 图卷积单元），
+        # 创建一个TCN_GCN_unit（已经包含了按GCN→注意力→TCN顺序的处理），
         # 输入通道为self.ch（由h3d决定，3D数据为4，2D为3），输出通道为self.ch1（32），
         # 使用的邻接矩阵为A（图的邻接矩阵），residual=False表示不使用残差连接。
         self.l1 = TCN_GCN_unit(self.ch, self.ch1, A, residual=False)
@@ -100,7 +121,7 @@ class pedMondel(nn.Module):
                 nn.Conv1d(self.ch1, self.ch1, 3, bias=False),  # 定义第二个1D卷积层，输入和输出通道为self.ch1（32），卷积核大小为3。
                 nn.BatchNorm1d(self.ch1), nn.SiLU())
         # ----------------------------------------------------------------------------------------------------
-        # 创建一个TCN_GCN_unit（时序卷积 + 图卷积单元），
+        # 创建一个TCN_GCN_unit（已经包含了按GCN→注意力→TCN顺序的处理），
         # 输入通道为self.ch1（32），输出通道为self.ch2（64），
         # 使用的邻接矩阵为A（图的邻接矩阵）。
         self.l2 = TCN_GCN_unit(self.ch1, self.ch2, A)
@@ -133,11 +154,6 @@ class pedMondel(nn.Module):
         # 定义一个自适应平均池化层 (AdaptiveAvgPool2d)，
         # 它会将输入的大小池化到指定的输出大小，这里输出大小为 (1, 1)，
         # 即将每个特征图的空间维度（高和宽）压缩为1，从而获得每个特征图的全局平均值。
-        
-        self.att_spatial = SpatialAttention(self.ch2)
-        self.att_temporal = TemporalAttention(self.ch2)
-        self.att_channel_ch1 = ChannelAttention(self.ch1)  # 32 通道的注意力
-        self.att_channel_ch2 = ChannelAttention(self.ch2)  # 64 通道的注意力
 
         self.linear = nn.Linear(self.ch2, self.n_clss)
         # 定义一个全连接层，用于将特征图的输出映射到最终的分类数 `self.n_clss`。
@@ -158,42 +174,57 @@ class pedMondel(nn.Module):
     def forward(self, kp, frame=None, vel=None): 
 
         N, C, T, V = kp.shape
+        # 原始 kp ([32, 4, 32, 19]) 
+        # print(f"Original kp shape: {kp.shape}")
         kp = kp.permute(0, 1, 3, 2).contiguous().view(N, C * V, T)  # 对 `kp` 进行变换，首先交换维度，使得 `kp` 的形状变成 `(N, C * V, T)`，这通常是为了适应卷积操作（对关键点的时间序列进行卷积处理）
+        # kp交换维度后([32, 76, 32])
+        # print(f"kp after permute and view: {kp.shape}")
         kp = self.data_bn(kp) # 对 `kp` 应用批归一化（`data_bn` 是一个批归一化层），标准化输入数据
         kp = kp.view(N, C, V, T).permute(0, 1, 3, 2).contiguous() # 将 `kp` 恢复回 `(N, C, V, T)` 形状，并通过 `permute` 交换维度，以便后续处理
-        
+        # kp 恢复维度[32, 4, 32, 19]
+        # print(f"kp after reshape back: {kp.shape}")
+
         if self.frames:
             f1 = self.conv0(frame)  # 第一次conv卷积
         if self.vel:
             v1 = self.v0(vel)  # 第一次vel卷积
 
         # --------------------------
+        # 第一个TCN_GCN单元（内部已经按GCN→注意力→TCN的顺序处理）
         x1 = self.l1(kp)
+        # x1 经过 l1层 [32, 32, 32, 19]
+        # print(f"x1 after l1: {x1.shape}")
+
         if self.frames:
             f1 = self.conv1(f1)   
             x1.mul(self.pool_sigm_2d(f1)) # 对 `f1` 应用池化并使用 Sigmoid 激活函数融合特征，再与 `x1` 相乘，作为加权融合的操作
+            # x1 经过 frame 融合 ([32, 32, 32, 19])
+            # print(f"x1 after frame fusion: {x1.shape}")
         if self.vel:   
             v1 = self.v1(v1)
             x1 = x1.mul(self.pool_sigm_1d(v1).unsqueeze(-1)) # 对 `v1` 应用池化并使用 Sigmoid 激活函数融合特征，再与 `x1` 相乘，作为加权融合的操作
-        # 进行 Spatial Attention, Temporal Attention 和 Channel Attention
-        x1 = self.att_spatial(x1) * x1
-        x1 = self.att_temporal(x1) * x1
-        x1 = self.att_channel_ch1(x1) * x1  # 使用 32 通道的注意力
+            # x1 经过 velocity 融合: ([32, 32, 32, 19])
+            # print(f"x1 after velocity fusion: {x1.shape}")      
+        # --------------------------      
+         
         # --------------------------
-        
-        # --------------------------
+        # 第二个TCN_GCN单元（内部已经按GCN→注意力→TCN的顺序处理）
         x1 = self.l2(x1)
+        # x1 经过 l2层: torch.Size([32, 64, 32, 19])
+        # print(f"x1 after l2: {x1.shape}")
+
         if self.frames:
             f1 = self.conv2(f1) 
             x1 = x1.mul(self.pool_sigm_2d(f1))
+            # x1 经过 第二次 frame 融合: torch.Size([32, 64, 32, 19])
+            # print(f"x1 after second frame fusion: {x1.shape}")
         if self.vel:  
             v1 = self.v2(v1)
             x1 = x1.mul(self.pool_sigm_1d(v1).unsqueeze(-1))
-        # 进行 Spatial Attention, Temporal Attention 和 Channel Attention
-        x1 = self.att_spatial(x1) * x1
-        x1 = self.att_temporal(x1) * x1
-        x1 = self.att_channel_ch2(x1) * x1  # 使用 64 通道的注意力
+            # x1 经过 第二次 velocity 融合: torch.Size([32, 64, 32, 19])
+            # print(f"x1 after second velocity fusion: {x1.shape}")              
         # --------------------------
+  
         # x1 = self.l3(x1)
         # if self.frames:
         #     f1 = self.conv3(f1) 
@@ -204,6 +235,8 @@ class pedMondel(nn.Module):
         # --------------------------
 
         x1 = self.gap(x1).squeeze(-1)
+        # x1 经过池化 gap: torch.Size([32, 64, 1])
+        # print(f"x1 after gap: {x1.shape}")
         x1 = x1.squeeze(-1)
         x1 = self.drop(x1)
         x1 = self.linear(x1)
@@ -319,9 +352,16 @@ class unit_gcn(nn.Module):
 class TCN_GCN_unit(nn.Module): 
     def __init__(self, in_channels, out_channels, A, stride=1, residual=True, adaptive=True):
         super(TCN_GCN_unit, self).__init__()
-        self.gcn1 = unit_gcn(in_channels, out_channels, A, adaptive=adaptive)  # 定义第一个图卷积层
-        self.tcn1 = unit_tcn(out_channels, out_channels, stride=stride)  # 定义第一个时间卷积层
+        # 定义第一个图卷积层
+        self.gcn1 = unit_gcn(in_channels, out_channels, A, adaptive=adaptive)  
+        # 添加三个注意力模块
+        self.spatial_attention = SpatialAttention(out_channels)
+        self.temporal_attention = TemporalAttention(out_channels)
+        self.channel_attention = ChannelAttention(out_channels)
+        # 定义第一个时间卷积层
+        self.tcn1 = unit_tcn(out_channels, out_channels, stride=stride)  
         self.relu = nn.ReLU(inplace=True)
+
         if not residual:
             self.residual = lambda x: 0
 
@@ -332,5 +372,25 @@ class TCN_GCN_unit(nn.Module):
             self.residual = unit_tcn(in_channels, out_channels, kernel_size=1, stride=stride)
 
     def forward(self, x):
-        y = self.relu(self.tcn1(self.gcn1(x)) + self.residual(x))
+        # 1. 先应用GCN
+        gcn_out = self.gcn1(x)
+        
+        # 2. 然后依次应用三个注意力模块
+        # 空间注意力
+        spatial_att = self.spatial_attention(gcn_out)
+        gcn_out = gcn_out * spatial_att
+        
+        # 时间注意力
+        temporal_att = self.temporal_attention(gcn_out)
+        gcn_out = gcn_out * temporal_att
+        
+        # 通道注意力
+        channel_att = self.channel_attention(gcn_out)
+        gcn_out = gcn_out * channel_att
+        
+        # 3. 最后应用TCN
+        y = self.tcn1(gcn_out)
+        
+        # 添加残差连接并应用ReLU
+        y = self.relu(y + self.residual(x))
         return y
