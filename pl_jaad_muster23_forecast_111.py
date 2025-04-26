@@ -144,7 +144,7 @@ class LitPedGraph(pl.LightningModule):
         'frequency': 1,
         'name': 'linear_lr_scheduler'
         }
-        return [optimizer], [scheduler]
+        return [optimizer], [lr_scheduler]
 
 
 def data_loader(args):
