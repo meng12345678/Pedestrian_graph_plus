@@ -3,6 +3,7 @@ from torchvision import transforms as A
 from torch.utils.data import DataLoader
 from torch.nn import functional as F
 
+
 import pytorch_lightning as pl
 from torchmetrics.functional.classification.accuracy import accuracy
 from sklearn.metrics import balanced_accuracy_score
@@ -58,6 +59,11 @@ class LitPedGraph(pl.LightningModule):
         return y
 
     def training_step(self, batch, batch_nb):
+
+        # 记录当前学习率（每次batch更新后）
+        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
+        self.log('learning_rate', current_lr, prog_bar=True, logger=True)
+
         x = batch[0]
         y = batch[1]
         f = batch[2] if self.frames else None
@@ -123,15 +129,22 @@ class LitPedGraph(pl.LightningModule):
         self.log('test_loss', loss, prog_bar=True)
         self.log('test_acc', acc * 100.0, prog_bar=True)
         return loss
-
+    # 衰减lr
     def configure_optimizers(self):
-        optm = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-3)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=0.01, weight_decay=1e-3)  # 初始lr=0.01
+    
+        def lr_lambda(current_step):
+        # 线性衰减公式: lr = start_lr - (start_lr - end_lr) * (current_step/total_steps)
+            progress = min(current_step / self.total_steps, 1.0)  # 确保不超过1.0
+            return 1.0 - progress * (1.0 - (0.001 / 0.01))  # 从1.0线性衰减到0.1 (0.001/0.01)
+    
         lr_scheduler = {
-            'name': 'OneCycleLR',
-            'scheduler': torch.optim.lr_scheduler.OneCycleLR(optm, max_lr=self.lr, div_factor=10.0, final_div_factor=1e4, total_steps=self.total_steps, verbose=False),
-            'interval': 'step', 'frequency': 1,
+        'scheduler': LambdaLR(optimizer, lr_lambda),
+        'interval': 'step',  # 每个batch更新
+        'frequency': 1,
+        'name': 'linear_lr_scheduler'
         }
-        return [optm], [lr_scheduler]
+        return [optimizer], [scheduler]
 
 
 def data_loader(args):
