@@ -2,7 +2,7 @@ import torch
 from torchvision import transforms as A
 from torch.utils.data import DataLoader
 from torch.nn import functional as F
-
+from torch.optim.lr_scheduler import LambdaLR
 
 import pytorch_lightning as pl
 from torchmetrics.functional.classification.accuracy import accuracy
