@@ -1,0 +1,260 @@
+import os
+import torch
+import numpy as np
+from pathlib import Path
+import argparse
+
+import pytorch_lightning as pl
+from torch.nn import functional as F
+from torch.utils.data import DataLoader
+from torchvision import transforms as A
+from torch.optim.lr_scheduler import LambdaLR
+from torchmetrics.functional.classification.accuracy import accuracy
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+
+from jaad_dataloader23 import DataSet
+from models.ped_graph23 import pedMondel
+
+
+def seed_everything(seed):
+    """设置随机种子，确保可复现"""
+    torch.cuda.empty_cache()
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True
+
+
+class LitPedGraph(pl.LightningModule):
+    def __init__(self, args, len_train_loader):
+        super().__init__()
+        self.balance = args.balance
+        # 计算总步数：epoch × steps_per_epoch
+        self.total_steps = len_train_loader * args.epochs
+
+        # 保存超参
+        self.lr = args.lr
+        self.epochs = args.epochs
+        self.frames = args.frames
+        self.velocity = args.velocity
+        self.time_crop = args.time_crop
+
+        # 模型主体
+        self.model = pedMondel(
+            use_frame=args.frames,
+            use_velocity=args.velocity,
+            seg=args.seg,
+            h3d=args.H3D,
+            n_clss=3
+        )
+
+        # 针对三分类做类别不平衡加权
+        device = next(self.model.parameters()).device
+        tr_ns = np.array([1025, 4778, 17582], dtype=float)
+        val_ns = np.array([176, 454, 2772], dtype=float)
+        te_ns = np.array([1871, 3204, 13037], dtype=float)
+        self.tr_weight  = torch.from_numpy(tr_ns.min()/tr_ns).float().to(device)
+        self.val_weight = torch.from_numpy(val_ns.min()/val_ns).float().to(device)
+        self.te_weight  = torch.from_numpy(te_ns.min()/te_ns).float().to(device)
+
+    def forward(self, kp, f, v):
+        return self.model(kp, f, v)
+
+    def training_step(self, batch, batch_idx):
+        kp, y = batch[0], batch[1]
+        f = batch[2] if self.frames else None
+        v = batch[3] if self.velocity else None
+
+        # 随机时间裁剪，增强鲁棒性
+        if np.random.rand() < 0.5 and self.time_crop:
+            crop_len = np.random.randint(2, kp.shape[-1]+1)
+            kp = kp[:, :, -crop_len:]
+
+        logits = self(kp, f, v)
+        weight = None if self.balance else self.tr_weight
+
+        # one-hot
+        y_onehot = torch.zeros((y.size(0), 3), device=y.device)
+        y_onehot.scatter_(1, y.long().unsqueeze(1), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=weight)
+
+        preds = logits.softmax(1).argmax(dim=1)
+        acc = accuracy(preds, y.long(), task='multiclass', num_classes=3)
+
+        self.log('train_loss', loss, prog_bar=True)
+        self.log('train_acc', 100.0 * acc, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        kp, y = batch[0], batch[1]
+        f = batch[2] if self.frames else None
+        v = batch[3] if self.velocity else None
+
+        logits = self(kp, f, v)
+        weight = None if self.balance else self.val_weight
+
+        y_onehot = torch.zeros((y.size(0), 3), device=y.device)
+        y_onehot.scatter_(1, y.long().unsqueeze(1), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=weight)
+
+        preds = logits.softmax(1).argmax(dim=1)
+        acc = accuracy(preds, y.long(), task='multiclass', num_classes=3)
+
+        self.log('val_loss', loss, prog_bar=True)
+        self.log('val_acc', 100.0 * acc, prog_bar=True)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        kp, y = batch[0], batch[1]
+        f = batch[2] if self.frames else None
+        v = batch[3] if self.velocity else None
+
+        logits = self(kp, f, v)
+        weight = None if self.balance else self.te_weight
+
+        y_onehot = torch.zeros((y.size(0), 3), device=y.device)
+        y_onehot.scatter_(1, y.long().unsqueeze(1), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=weight)
+
+        preds = logits.softmax(1).argmax(dim=1)
+        acc = accuracy(preds, y.long(), task='multiclass', num_classes=3)
+
+        self.log('test_loss', loss, prog_bar=True)
+        self.log('test_acc', 100.0 * acc, prog_bar=True)
+        return loss
+
+    def configure_optimizers(self):
+        # 初始学习率从 --lr 参数读取，最终衰减到 0.001
+        init_lr  = self.lr
+        final_lr = 0.001
+
+        optimizer = torch.optim.AdamW(self.parameters(), lr=init_lr, weight_decay=1e-3)
+
+        def lr_lambda(step):
+            frac = step / float(self.total_steps)
+            end_factor = final_lr / init_lr
+            return 1.0 - (1.0 - end_factor) * frac
+
+        scheduler = {
+            'scheduler': LambdaLR(optimizer, lr_lambda, verbose=False),
+            'interval': 'step',    # 每个 batch 更新一次
+            'frequency': 1,
+        }
+        return [optimizer], [scheduler]
+
+
+def data_loader(args):
+    """构建训练/验证/测试 DataLoader"""
+    transform = A.Compose([
+        A.ToPILImage(),
+        A.RandomPosterize(bits=2),
+        A.RandomInvert(p=0.2),
+        A.RandomSolarize(threshold=50.0),
+        A.RandomAdjustSharpness(sharpness_factor=2),
+        A.RandomAutocontrast(p=0.2),
+        A.RandomEqualize(p=0.2),
+        A.ColorJitter(0.5, 0.3),
+        A.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2)),
+        A.ToTensor(),
+        A.Normalize(mean=[0.485, 0.456, 0.406],
+                    std=[0.229, 0.224, 0.225]),
+    ])
+
+    tr_ds = DataSet(
+        path=args.data_path, jaad_path=args.jaad_path,
+        data_set='train', frame=True, vel=True,
+        balance=False, transforms=transform,
+        seg_map=args.seg, h3d=args.H3D, forcast=args.forcast
+    )
+    val_ds = DataSet(
+        path=args.data_path, jaad_path=args.jaad_path,
+        data_set='val', frame=True, vel=True,
+        balance=False, transforms=transform,
+        seg_map=args.seg, h3d=args.H3D, forcast=args.forcast
+    )
+    te_ds = DataSet(
+        path=args.data_path, jaad_path=args.jaad_path,
+        data_set='test', frame=True, vel=True,
+        balance=args.balance, bh='all', t23=args.balance,
+        transforms=transform, seg_map=args.seg,
+        h3d=args.H3D, forcast=args.forcast
+    )
+
+    tr = DataLoader(tr_ds, batch_size=args.batch_size, shuffle=True,
+                    num_workers=args.num_workers, pin_memory=True)
+    val = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
+                     num_workers=args.num_workers, pin_memory=True)
+    te = DataLoader(te_ds, batch_size=args.batch_size, shuffle=False,
+                    num_workers=args.num_workers, pin_memory=True)
+    return tr, val, te
+
+
+def main(args):
+    seed_everything(args.seed)
+
+    # 根据 logdir 名解析各模块开关
+    try:
+        feat = Path(args.logdir).parts[-2].split('-')[2]
+    except:
+        feat = ''
+    args.frames   = 'I' in feat
+    args.velocity = 'V' in feat
+    args.seg      = 'S' in feat
+    args.forcast  = 'F' in feat
+    args.time_crop= 'T' in feat
+    args.H3D      = not args.logdir.endswith('h2d/')
+
+    tr, val, te = data_loader(args)
+    model = LitPedGraph(args, len(tr))
+
+    # 创建输出目录
+    Path(args.logdir).mkdir(parents=True, exist_ok=True)
+
+    checkpoint_cb = ModelCheckpoint(
+        dirpath=args.logdir,
+        monitor='val_acc',
+        mode='max',
+        save_top_k=5,
+        filename='jaad23-{epoch:02d}-{val_acc:.3f}',
+        save_weights_only=True
+    )
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+
+    trainer = pl.Trainer(
+        accelerator='gpu',
+        devices='auto',
+        max_epochs=args.epochs,
+        precision='16-mixed',
+        callbacks=[checkpoint_cb, lr_monitor],
+    )
+
+    if args.auto_lr_find:
+        lr_finder = trainer.tuner.lr_find(model, tr)
+        suggested = lr_finder.suggestion()
+        print(f"建议的学习率: {suggested:.2e}")
+        model.hparams.lr = suggested
+
+    trainer.fit(model, tr, val)
+    torch.save(model.model.state_dict(), os.path.join(args.logdir, 'last.pth'))
+    trainer.test(model, te, ckpt_path='best')
+    torch.save(model.model.state_dict(), os.path.join(args.logdir, 'best.pth'))
+    print("训练与测试完成。")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Pedestrian Crossing Prediction")
+    parser.add_argument('--logdir',      type=str,   default="./data/jaad-23-IVSFT/")
+    parser.add_argument('--data_path',   type=str,   default="./data/JAAD")
+    parser.add_argument('--jaad_path',   type=str,   default="./JAAD")
+    parser.add_argument('--epochs',      type=int,   default=30)
+    parser.add_argument('--batch_size',  type=int,   default=32)
+    parser.add_argument('--num_workers', type=int,   default=4)
+    parser.add_argument('--lr',          type=float, default=0.01,
+                        help='initial learning rate，will decay to 0.001')
+    parser.add_argument('--balance',     type=bool,  default=True)
+    parser.add_argument('--seed',        type=int,   default=42)
+    parser.add_argument('--auto_lr_find',action='store_true')
+    args = parser.parse_args()
+    main(args)
