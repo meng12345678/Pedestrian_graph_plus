@@ -222,7 +222,7 @@ def main(args):
 if __name__ == "__main__":
     torch.cuda.empty_cache()
     parser = argparse.ArgumentParser("Pedestrian prediction crossing")
-    parser.add_argument('--logdir', type=str, default="./data/jaad-23-IVSFT/", help="logger directory for tensorboard")
+    parser.add_argument('--logdir', type=str, default="./data/jaad-23-IVSFT-h2d/", help="logger directory for tensorboard")
     parser.add_argument('--device', type=str, default=0, help="GPU")
     parser.add_argument('--epochs', type=int, default=30, help="Number of epochs to train")
     parser.add_argument('--lr', type=float, default=0.008, help='learning rate to train')
@@ -234,7 +234,7 @@ if __name__ == "__main__":
     parser.add_argument('--seg', type=bool, default=False, help='Use the segmentation map')
     parser.add_argument('--forcast', type=bool, default=False, help='Use the human pose forecasting data')
     parser.add_argument('--time_crop', type=bool, default=False)
-    parser.add_argument('--H3D', type=bool, default=True, help='Use 3D human keypoints')
+    parser.add_argument('--H3D', type=bool, default=False, help='Use 3D human keypoints')
     parser.add_argument('--jaad_path', type=str, default='./JAAD')
     parser.add_argument('--balance', type=bool, default=True, help='Balance or not the dataset')
     parser.add_argument('--bh', type=str, default='all', help='all or bh, if use all samples or only samples with behavior labels')
