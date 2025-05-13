@@ -62,16 +62,27 @@ class musterModel(nn.Module):
         super(musterModel, self).__init__()
 
         self.model = pedMondel(args.frames, vel=args.velocity, seg=args.seg, h3d=args.H3D, n_clss=3)
+
         ckpt = torch.load(args.ckpt, map_location=args.device)
-        self.model.load_state_dict(ckpt)
+
+        if args.ckpt.endswith(".pth"):
+            print("Loading from .pth format")
+            self.model.load_state_dict(ckpt)
+        elif args.ckpt.endswith(".ckpt"):
+            print("Loading from .ckpt format")
+            state_dict = ckpt["state_dict"]
+            # 去除 LightningModule 加的 "model." 前缀
+            new_state_dict = {k.replace("model.", ""): v for k, v in state_dict.items() if "model." in k}
+            self.model.load_state_dict(new_state_dict)
+        else:
+            raise ValueError(f"Unsupported checkpoint format: {args.ckpt}")
+
         self.model = self.model.to(args.device)
         self.model.eval()
-    
+
     def forward(self, x, f, v):
         with torch.no_grad():
-            cx = self.model(x, f, v).softmax(1)
-        return cx
-
+            return self.model(x, f, v).softmax(1)
 def prepare_input(resolution):
 
     x = torch.FloatTensor(1, 4, 62, 19).cuda()
