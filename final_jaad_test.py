@@ -47,7 +47,7 @@ def data_loader(args):
         t23=args.balance,
         transforms=transform, 
         pcpa=args.pcpa,
-        forcast=args.forcast,
+        forecast=args.forecast,
         last2=args.last2
         )
     
@@ -278,7 +278,7 @@ if __name__ == "__main__":
     parser.add_argument('--frames', type=bool, default=False, help='avtivate the use of raw frames')
     parser.add_argument('--velocity', type=bool, default=False, help='activate the use of the odb and gps velocity')
     parser.add_argument('--seg', type=bool, default=False, help='Use the segmentation map')
-    parser.add_argument('--forcast', type=bool, default=False, help='Use the human pose forcasting data')
+    parser.add_argument('--forecast', type=bool, default=False, help='Use the human pose forecasting data')
     parser.add_argument('--H3D', type=bool, default=True, help='Use 3D human keypoints')
     parser.add_argument('--jaad_path', type=str, default='./JAAD')
     parser.add_argument('--bh', type=str, default='all', help='all or bh, if use all samples or only samples with behaevior labers')
