@@ -28,6 +28,28 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
+# 新增：自定义回调用于保存每个epoch的模型
+class EpochModelSaver(pl.Callback):
+    def __init__(self, save_dir, start_epoch=4, end_epoch=29):
+        super().__init__()
+        self.save_dir = save_dir
+        self.start_epoch = start_epoch
+        self.end_epoch = end_epoch
+        
+        # 确保保存目录存在
+        os.makedirs(save_dir, exist_ok=True)
+    
+    def on_train_epoch_end(self, trainer, pl_module):
+        current_epoch = trainer.current_epoch
+        
+        # 只在指定的epoch范围内保存
+        if self.start_epoch <= current_epoch <= self.end_epoch:
+            # 保存完整的模型状态
+            model_path = os.path.join(self.save_dir, f'epoch_{current_epoch:02d}.pth')
+            torch.save(pl_module.model.state_dict(), model_path)
+            print(f"Model saved at epoch {current_epoch}: {model_path}")
+
+
 
 class LitPedGraph(pl.LightningModule):
 
@@ -198,11 +220,18 @@ def main(args):
     
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
+    # 新增：添加epoch模型保存回调
+    epoch_saver = EpochModelSaver(
+        save_dir=os.path.join(args.logdir, 'epoch_models'),
+        start_epoch=args.save_start_epoch,
+        end_epoch=args.save_end_epoch
+    )
+
     trainer = pl.Trainer(
         accelerator='gpu',
         devices='auto',
         max_epochs=args.epochs,
-        callbacks=[checkpoint_callback, lr_monitor],
+        callbacks=[checkpoint_callback, lr_monitor, epoch_saver],
         precision='16-mixed',
     )
 
@@ -227,7 +256,7 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=30, help="Number of epochs to train")
     parser.add_argument('--lr', type=float, default=0.008, help='learning rate to train')
     parser.add_argument('--data_path', type=str, default='./data/JAAD', help='Path to the train and test data')
-    parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training and test")
+    parser.add_argument('--batch_size', type=int, default=8, help="Batch size for training and test")
     parser.add_argument('--num_workers', type=int, default=0, help="Number of workers for the dataloader")
     parser.add_argument('--frames', type=bool, default=False, help='Activate the use of raw frames')
     parser.add_argument('--velocity', type=bool, default=False, help='Activate the use of the OBD and GPS velocity')
@@ -240,5 +269,9 @@ if __name__ == "__main__":
     parser.add_argument('--bh', type=str, default='all', help='all or bh, if use all samples or only samples with behavior labels')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--auto_lr_find', action='store_true', help='Enable auto learning rate finder')
+
+       # 新增：添加保存epoch范围的参数
+    parser.add_argument('--save_start_epoch', type=int, default=5, help='Start epoch for saving models')
+    parser.add_argument('--save_end_epoch', type=int, default=29, help='End epoch for saving models')
     args = parser.parse_args()
     main(args)
