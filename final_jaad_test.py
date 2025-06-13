@@ -47,7 +47,7 @@ def data_loader(args):
         t23=args.balance,
         transforms=transform, 
         pcpa=args.pcpa,
-        forecast=args.forecast,
+        forcast=args.forcast,
         last2=args.last2
         )
     
@@ -61,28 +61,17 @@ class musterModel(nn.Module):
     def __init__(self, args):
         super(musterModel, self).__init__()
 
-        self.model = pedMondel(args.frames, vel=args.velocity, seg=args.seg, h3d=args.H3D, n_clss=3)
-
+        self.model = pedMondel(args.frames, vel=args.velocity, seg=args.seg, h3d=False, n_clss=3)
         ckpt = torch.load(args.ckpt, map_location=args.device)
-
-        if args.ckpt.endswith(".pth"):
-            print("Loading from .pth format")
-            self.model.load_state_dict(ckpt)
-        elif args.ckpt.endswith(".ckpt"):
-            print("Loading from .ckpt format")
-            state_dict = ckpt["state_dict"]
-            # 去除 LightningModule 加的 "model." 前缀
-            new_state_dict = {k.replace("model.", ""): v for k, v in state_dict.items() if "model." in k}
-            self.model.load_state_dict(new_state_dict)
-        else:
-            raise ValueError(f"Unsupported checkpoint format: {args.ckpt}")
-
+        self.model.load_state_dict(ckpt)
         self.model = self.model.to(args.device)
         self.model.eval()
-
+    
     def forward(self, x, f, v):
         with torch.no_grad():
-            return self.model(x, f, v).softmax(1)
+            cx = self.model(x, f, v).softmax(1)
+        return cx
+
 def prepare_input(resolution):
 
     x = torch.FloatTensor(1, 4, 62, 19).cuda()
@@ -290,7 +279,7 @@ if __name__ == "__main__":
     parser.add_argument('--velocity', type=bool, default=False, help='activate the use of the odb and gps velocity')
     parser.add_argument('--seg', type=bool, default=False, help='Use the segmentation map')
     parser.add_argument('--forcast', type=bool, default=False, help='Use the human pose forcasting data')
-    parser.add_argument('--H3D', type=bool, default=False, help='Use 3D human keypoints')
+    parser.add_argument('--H3D', type=bool, default=True, help='Use 3D human keypoints')
     parser.add_argument('--jaad_path', type=str, default='./JAAD')
     parser.add_argument('--bh', type=str, default='all', help='all or bh, if use all samples or only samples with behaevior labers')
     parser.add_argument('--balance', type=bool, default=False, help='Balnce or not the data set (over sampling)')
