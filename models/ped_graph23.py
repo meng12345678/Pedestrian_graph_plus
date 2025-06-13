@@ -81,7 +81,7 @@ class pedMondel(nn.Module):
     # h3d: 是否启用3D人体关键点数据（如果为True，则使用3D关键点数据，默认值为True）。
     # nodes: 节点数量，通常表示图中的关键点数量，默认为19。
     # n_clss: 类别数，默认为1。
-    def __init__(self, frames, vel=False, seg=False, h3d=True, nodes=19, n_clss=1):
+    def __init__(self, frames, vel=False, seg=False, h3d=False, nodes=19, n_clss=1):
         super(pedMondel, self).__init__()
  
         self.h3d = h3d # 3D人体关键点数据是否启用。True表示启用3D数据，否则使用2D数据。
@@ -176,7 +176,7 @@ class pedMondel(nn.Module):
         N, C, T, V = kp.shape
         # 原始 kp ([32, 4, 32, 19]) 
         # print(f"Original kp shape: {kp.shape}")
-        kp = kp.permute(0, 1, 3, 2).contiguous().view(N, C * V, T)  # 对 `kp` 进行变换，首先交换维度，使得 `kp` 的形状变成 `(N, C * V, T)`，这通常是为了适应卷积操作（对关键点的时间序列进行卷积处理）
+        kp = kp.permute(0, 1, 3, 2).contiguous().view(N, C * V, T)  # `kp` 交换维度，使得 `kp` 的形状变成 `(N, C * V, T)`，为了适应卷积操作（对关键点的时间序列进行卷积处理）
         # kp交换维度后([32, 76, 32])
         # print(f"kp after permute and view: {kp.shape}")
         kp = self.data_bn(kp) # 对 `kp` 应用批归一化（`data_bn` 是一个批归一化层），标准化输入数据
@@ -197,12 +197,12 @@ class pedMondel(nn.Module):
 
         if self.frames:
             f1 = self.conv1(f1)   
-            x1.mul(self.pool_sigm_2d(f1)) # 对 `f1` 应用池化并使用 Sigmoid 激活函数融合特征，再与 `x1` 相乘，作为加权融合的操作
+            x1 = x1 * self.pool_sigm_2d(f1)# 对 `f1` 应用池化并使用 Sigmoid 激活函数融合特征，再与 `x1` 相乘，作为加权融合的操作
             # x1 经过 frame 融合 ([32, 32, 32, 19])
             # print(f"x1 after frame fusion: {x1.shape}")
         if self.vel:   
             v1 = self.v1(v1)
-            x1 = x1.mul(self.pool_sigm_1d(v1).unsqueeze(-1)) # 对 `v1` 应用池化并使用 Sigmoid 激活函数融合特征，再与 `x1` 相乘，作为加权融合的操作
+            x1 = x1 * self.pool_sigm_1d(v1).unsqueeze(-1) # 对 `v1` 应用池化并使用 Sigmoid 激活函数融合特征，再与 `x1` 相乘，作为加权融合的操作
             # x1 经过 velocity 融合: ([32, 32, 32, 19])
             # print(f"x1 after velocity fusion: {x1.shape}")      
         # --------------------------      
@@ -215,12 +215,12 @@ class pedMondel(nn.Module):
 
         if self.frames:
             f1 = self.conv2(f1) 
-            x1 = x1.mul(self.pool_sigm_2d(f1))
+            x1 = x1 * self.pool_sigm_2d(f1)
             # x1 经过 第二次 frame 融合: torch.Size([32, 64, 32, 19])
             # print(f"x1 after second frame fusion: {x1.shape}")
         if self.vel:  
             v1 = self.v2(v1)
-            x1 = x1.mul(self.pool_sigm_1d(v1).unsqueeze(-1))
+            x1 = x1 * self.pool_sigm_1d(v1).unsqueeze(-1)  # 第二次 velocity 融合
             # x1 经过 第二次 velocity 融合: torch.Size([32, 64, 32, 19])
             # print(f"x1 after second velocity fusion: {x1.shape}")              
         # --------------------------
@@ -261,7 +261,6 @@ def conv_branch_init(conv, branches):
     n = weight.size(0)
     k1 = weight.size(1)
     k2 = weight.size(2)
-    nn.init.normal_(weight, 0, math.sqrt(2. / (n * k1 * k2 * branches)))
     if conv.bias is not None:
         nn.init.constant_(conv.bias, 0)
 
