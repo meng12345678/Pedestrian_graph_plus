@@ -38,8 +38,8 @@ def data_loader(args):
     te_data = DataSet(
         path=args.data_path, 
         jaad_path=args.jaad_path, 
-        frame=True, 
-        vel=True,
+        frame=True,  # 使用args.frames而不是True
+        vel=True,  # 使用args.velocity而不是True
         seg_map=args.seg,
         h3d=args.H3D,
         balance=args.balance,
@@ -62,11 +62,16 @@ class musterModel(nn.Module):
         super(musterModel, self).__init__()
 
         self.model = pedMondel(args.frames, vel=args.velocity, seg=args.seg, h3d=False, n_clss=3)
-        ckpt = torch.load(args.ckpt, map_location=args.device)
-        self.model.load_state_dict(ckpt)
-        self.model = self.model.to(args.device)
-        self.model.eval()
-    
+        # 加载权重的代码
+        ckpt = torch.load(args.ckpt, map_location='cpu')
+        state_dict = ckpt
+        new_state_dict = {k.replace('model.', '', 1): v for k, v in state_dict.items()}
+        self.model.load_state_dict(new_state_dict, strict=False)
+        
+        # 添加这行：设置设备
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = self.model.to(self.device)
+
     def forward(self, x, f, v):
         with torch.no_grad():
             cx = self.model(x, f, v).softmax(1)
@@ -187,10 +192,17 @@ def main(args):
             str_t.record()
             if args.last2:
                 x = x[:, :, -(args.lastn+30):] if args.forecast else x[:, :, -args.lastn:]
-                pred = model(x.contiguous().half(), f.half(), v.half())
+                pred = model(
+                    x.contiguous().half(), 
+                    f.half() if f is not None else None, 
+                    v.half() if v is not None else None
+                )
             else:
-                pred = model(x.half(), f.half(), v.half())
-            
+                pred = model(
+                    x.half(), 
+                    f.half() if f is not None else None, 
+                    v.half() if v is not None else None
+                )
             end_t.record()
 
             torch.cuda.synchronize()
