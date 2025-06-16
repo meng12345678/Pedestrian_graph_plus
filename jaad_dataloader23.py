@@ -11,7 +11,7 @@ from jaad_data import JAAD
 
 
 class DataSet(data.Dataset):
-    def __init__(self, path, jaad_path, data_set, frame, vel, balance=True, bh='all', t23=False, transforms=None, seg_map=True, h3d=True, pcpa=None, forcast=True):
+    def __init__(self, path, jaad_path, data_set, frame, vel, balance=True, bh='all', t23=False, transforms=None, seg_map=True, h3d=False, pcpa=None, forcast=True):
         
         np.random.seed(1)
         self.forcast = forcast
@@ -159,7 +159,7 @@ class DataSet(data.Dataset):
             bh = torch.from_numpy(ped_data['crossing'].reshape([1])).float()
         
         if not self.h3d:
-            kp = kp[[0, 1, 3], ].clone()
+            kp = kp[[0, 1, 2], ].clone()
 
         if self.frame and not self.vel:
             return kp, bh, img
