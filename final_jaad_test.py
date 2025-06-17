@@ -3,8 +3,10 @@ import torch.nn as nn
 from torchvision import transforms as A
 from final_jaad_dataloder import DataSet
 from models.ped_graph23 import pedMondel 
+import pandas as pd
 import time
 import copy
+import re
 
 from torch.utils.data import DataLoader
 import argparse
@@ -60,14 +62,15 @@ def data_loader(args):
 class musterModel(nn.Module):
     def __init__(self, args):
         super(musterModel, self).__init__()
-
-        self.model = pedMondel(args.frames, vel=args.velocity, seg=args.seg, h3d=False, n_clss=3)
+        
+        self.model = pedMondel(args.frames, vel=args.velocity, seg=args.seg, h3d=args.H3D, n_clss=3)
         # 加载权重的代码
         ckpt = torch.load(args.ckpt, map_location='cpu')
         state_dict = ckpt
         new_state_dict = {k.replace('model.', '', 1): v for k, v in state_dict.items()}
-        self.model.load_state_dict(new_state_dict, strict=False)
+        self.model.load_state_dict(new_state_dict)
         
+
         # 添加这行：设置设备
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = self.model.to(self.device)
@@ -134,16 +137,17 @@ class statsClass:
 def main(args):
 
     seed_everything(args.seed)
-    try:
-        m_feat = args.ckpt.split('/')[-2].split('-')[2]
-    except IndexError:
-        m_feat = 'None'
-    args.frames =    True if 'I' in m_feat else False
-    args.velocity =  True if 'V' in m_feat else False
-    args.seg =       True if 'S' in m_feat else False
-    args.forecast =  True if 'F' in m_feat else False
-    args.time_crop = True if 'T' in m_feat else False
-    args.H3D = False if args.ckpt.split('/')[-2].split('-')[-1] == 'h2d' else True
+    ckpt_dir = args.ckpt.split('/')[-3]  # 如 jaad-23-IVSFT-h2d
+    match = re.search(r'[A-Z]{2,5}', ckpt_dir)  # 匹配大写字母序列
+    m_feat = match.group(0) if match else 'IVSFT'
+
+    # 自动配置结构开关
+    args.frames    = 'I' in m_feat
+    args.velocity  = 'V' in m_feat
+    args.seg       = 'S' in m_feat
+    args.forecast  = 'F' in m_feat
+    args.time_crop = 'T' in m_feat
+    args.H3D       = False
     
 
     weather_PedG = {'cloudy': [[], []], 
@@ -241,6 +245,7 @@ def main(args):
             weather_fussi[weather_[0]][1].append(y.item())
             
     y = ys.copy()
+    #将 “irrelevant”（标签2）当成了 “no crossing”（标签0）来处理
     y[y==2] = 0
     pedgraph_pred = np.clip(pedgraph_pred, 0, 1)
     stats_fn = statsClass(pcpa_pred, g_pcpca_pred, fussi_pred, pedgraph_pred, ys)
@@ -252,6 +257,7 @@ def main(args):
     stats_fn.stats(roc_auc_score, False, 100)
     stats_fn.stats(average_precision_score, False, 100)
     
+    pd.set_option('display.max_columns', None)
     print(*['-']*30)
     print(f'balance data: {args.balance}, bh: {args.bh}, last2: {args.last2}, Model: ' + args.ckpt.split('/')[-2], )
     print(*['-']*30)
@@ -282,7 +288,7 @@ def main(args):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser("Pedestrian prediction crosing")
-    parser.add_argument('--ckpt', type=str, default="./weigths/jaad-23-IVFT/best.pth", help="Path to model weigths")
+    parser.add_argument('--ckpt', type=str, default="./weigths/jaad-23-IVSFT/best.pth", help="Path to model weigths")
     parser.add_argument('--device', type=str, default='cuda:0', help="GPU")
     parser.add_argument('--data_path', type=str, default='./data/JAAD', help='Path to the train and test data')
     parser.add_argument('--batch_size', type=int, default=1, help="Batch size for training and test")
@@ -291,7 +297,7 @@ if __name__ == "__main__":
     parser.add_argument('--velocity', type=bool, default=False, help='activate the use of the odb and gps velocity')
     parser.add_argument('--seg', type=bool, default=False, help='Use the segmentation map')
     parser.add_argument('--forecast', type=bool, default=False, help='Use the human pose forecasting data')
-    parser.add_argument('--H3D', type=bool, default=True, help='Use 3D human keypoints')
+    parser.add_argument('--H3D', type=bool, default=False, help='Use 3D human keypoints')
     parser.add_argument('--jaad_path', type=str, default='./JAAD')
     parser.add_argument('--bh', type=str, default='all', help='all or bh, if use all samples or only samples with behaevior labers')
     parser.add_argument('--balance', type=bool, default=False, help='Balnce or not the data set (over sampling)')
