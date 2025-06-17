@@ -93,7 +93,7 @@ class pedMondel(nn.Module):
         self.ch1, self.ch2 = 32, 64
         i_ch = 4 if seg else 3
 
-        self.data_bn = nn.BatchNorm1d(57)  # 创建一个批归一化层，用于1D数据，输入通道为ch*nodes
+        self.data_bn = nn.BatchNorm1d(self.ch * nodes)  # 创建一个批归一化层，用于1D数据，输入通道为ch*nodes
         bn_init(self.data_bn, 1) # 初始化批归一化层，通常会设置初始化方法
         self.drop = nn.Dropout(0.25)  
         A = np.stack([np.eye(nodes)] * 3, axis=0) # 创建一个3x(nodes x nodes)的单位矩阵（邻接矩阵），用于图神经网络或其他图结构计算。
