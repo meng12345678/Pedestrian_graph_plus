@@ -13,7 +13,7 @@ from jaad_data import JAAD
 
 
 class DataSet(data.Dataset):
-    def __init__(self, path, jaad_path, frame, vel, balance=True, bh='all', t23=False, transforms=None, seg_map=False, h3d=False, pcpa=None, forecast=True, last2=False, time_crop=False):
+    def __init__(self, path, jaad_path, frame, vel, balance=True, bh='all', t23=False, transforms=None, seg_map=False, h3d=True, pcpa=None, forecast=True, last2=False, time_crop=False):
 
         np.random.seed(42)
         self.time_crop = time_crop
@@ -217,7 +217,7 @@ class DataSet(data.Dataset):
             bh = torch.from_numpy(ped_data['crossing'].reshape([1])).float()
         
         if not self.h3d:
-            kp = kp[[0, 1, 2], ].clone()
+            kp = kp[[0, 1, 3], ].clone()
             
         if self.frame and not self.vel:
             return kp, bh, img, weather_, models_data
@@ -238,7 +238,7 @@ def main():
         ])
     
     
-    tr_data = DataSet(path=data_path,  jaad_path=jaad_path, frame=True, vel=True, balance= False, bh='all', transforms=transform, pcpa=pcpa, h3d=False)
+    tr_data = DataSet(path=data_path,  jaad_path=jaad_path, frame=True, vel=True, balance= False, bh='all', transforms=transform, pcpa=pcpa)
     iter_ = tqdm(range(len(tr_data)))
     labels = np.zeros([len(tr_data), 3])
 
