@@ -11,10 +11,10 @@ from jaad_data import JAAD
 
 
 class DataSet(data.Dataset):
-    def __init__(self, path, jaad_path, data_set, frame, vel, balance=True, bh='all', t23=False, transforms=None, seg_map=True, h3d=False, pcpa=None, forcast=True):
+    def __init__(self, path, jaad_path, data_set, frame, vel, balance=True, bh='all', t23=False, transforms=None, seg_map=True, h3d=True, pcpa=None, forecast=True):
         
         np.random.seed(1)
-        self.forcast = forcast
+        self.forecast = forecast
         self.h3d = h3d # bool if true 3D human key points are avalable otherwise 2D is going to be used
         self.t23 = t23
         self.seg = seg_map
@@ -124,8 +124,8 @@ class DataSet(data.Dataset):
         ped_data = self.ped_data[ped_id]
         w, h = ped_data['w'], ped_data['h']
 
-        if self.forcast:
-            ped_data['kps'][-30:] = ped_data['kps_forcast']
+        if self.forecast:
+            ped_data['kps'][-30:] = ped_data['kps_forecast']
             kp = ped_data['kps']
         else:
             kp = ped_data['kps'][:-30]
@@ -159,7 +159,7 @@ class DataSet(data.Dataset):
             bh = torch.from_numpy(ped_data['crossing'].reshape([1])).float()
         
         if not self.h3d:
-            kp = kp[[0, 1, 2], ].clone()
+            kp = kp[[0, 1, 3], ].clone()
 
         if self.frame and not self.vel:
             return kp, bh, img
