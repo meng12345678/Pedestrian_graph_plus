@@ -11,10 +11,10 @@ from jaad_data import JAAD
 
 
 class DataSet(data.Dataset):
-    def __init__(self, path, jaad_path, data_set, frame, vel, balance=True, bh='all', t23=False, transforms=None, seg_map=True, h3d=True, pcpa=None, forecast=True):
+    def __init__(self, path, jaad_path, data_set, frame, vel, balance=True, bh='all', t23=False, transforms=None, seg_map=True, h3d=True, pcpa=None, forcast=True):
         
         np.random.seed(1)
-        self.forecast = forecast
+        self.forcast = forcast
         self.h3d = h3d # bool if true 3D human key points are avalable otherwise 2D is going to be used
         self.t23 = t23
         self.seg = seg_map
@@ -124,8 +124,8 @@ class DataSet(data.Dataset):
         ped_data = self.ped_data[ped_id]
         w, h = ped_data['w'], ped_data['h']
 
-        if self.forecast:
-            ped_data['kps'][-30:] = ped_data['kps_forecast']
+        if self.forcast:
+            ped_data['kps'][-30:] = ped_data['kps_forcast']
             kp = ped_data['kps']
         else:
             kp = ped_data['kps'][:-30]
