@@ -63,7 +63,16 @@ class musterModel(nn.Module):
 
         self.model = pedMondel(args.frames, vel=args.velocity, seg=args.seg, h3d=args.H3D, n_clss=3)
         ckpt = torch.load(args.ckpt, map_location=args.device)
-        self.model.load_state_dict(ckpt)
+
+        if "state_dict" in ckpt:
+            # 只提取模型的 state_dict 并去除前缀 model.
+            state_dict = ckpt["state_dict"]
+            cleaned_dict = {k.replace("model.", ""): v for k, v in state_dict.items() if k.startswith("model.")}
+            self.model.load_state_dict(cleaned_dict, strict=True)
+        else:
+            # 普通 .pth 情况
+            self.model.load_state_dict(ckpt, strict=True)
+
         self.model = self.model.to(args.device)
         self.model.eval()
     
@@ -130,7 +139,7 @@ def main(args):
 
     seed_everything(args.seed)
     try:
-        m_feat = args.ckpt.split('/')[-3].split('-')[2]
+        m_feat = args.ckpt.split('/')[-2].split('-')[2]
     except IndexError:
         m_feat = 'None'
     args.frames =    True if 'I' in m_feat else False
@@ -138,7 +147,7 @@ def main(args):
     args.seg =       True if 'S' in m_feat else False
     args.forecast =  True if 'F' in m_feat else False
     args.time_crop = True if 'T' in m_feat else False
-    args.H3D = False if args.ckpt.split('/')[-3].split('-')[-1] == 'h2d' else True
+    args.H3D = False if args.ckpt.split('/')[-2].split('-')[-1] == 'h2d' else True
     
 
     weather_PedG = {'cloudy': [[], []], 
@@ -266,6 +275,22 @@ def main(args):
     print(f'Average run time for Pedestrian Graph +: {np.mean(timimg):.3f} ms')
     print('finish')     
 
+def batch_eval_ckpts(ckpt_dir, args):
+    import glob
+    from copy import deepcopy
+
+    ckpt_paths = sorted(glob.glob(os.path.join(ckpt_dir, 'epoch_epoch=*.ckpt')))
+    all_results = []
+
+    print(f"\nFound {len(ckpt_paths)} checkpoints in {ckpt_dir}\n")
+
+    for ckpt_path in ckpt_paths:
+        print("="*60)
+        print(f"Testing checkpoint: {ckpt_path}")
+        args_copy = deepcopy(args)
+        args_copy.ckpt = ckpt_path
+        main(args_copy)
+        print("="*60)
 
 if __name__ == "__main__":
 
