@@ -159,7 +159,7 @@ class DataSet(data.Dataset):
             bh = torch.from_numpy(ped_data['crossing'].reshape([1])).float()
         
         if not self.h3d:
-            kp = kp[[0, 1, 3], ].clone()
+            kp = kp[[0, 1, 2], ].clone()
 
         if self.frame and not self.vel:
             return kp, bh, img
