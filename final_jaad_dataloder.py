@@ -1,7 +1,7 @@
 import torch
 import torch.utils.data as data
 import os
-import pickle5 as pk
+import pickle as pk
 import matplotlib.pyplot as plt
 from pathlib import Path
 import numpy as np
@@ -217,7 +217,7 @@ class DataSet(data.Dataset):
             bh = torch.from_numpy(ped_data['crossing'].reshape([1])).float()
         
         if not self.h3d:
-            kp = kp[[0, 1, 2], ].clone()
+            kp = kp[[0, 1, 3], ].clone()
             
         if self.frame and not self.vel:
             return kp, bh, img, weather_, models_data
