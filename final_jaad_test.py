@@ -257,7 +257,7 @@ def main(args):
     stats_fn.stats(roc_auc_score, False, 100)
     stats_fn.stats(average_precision_score, False, 100)
     
-    pd.set_option('display.max_columns', None)
+    # pd.set_option('display.max_columns', None)
     print(*['-']*30)
     print(f'balance data: {args.balance}, bh: {args.bh}, last2: {args.last2}, Model: ' + args.ckpt.split('/')[-2], )
     print(*['-']*30)
