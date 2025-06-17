@@ -2,7 +2,6 @@ import torch
 from torchvision import transforms as A
 from torch.utils.data import DataLoader
 from torch.nn import functional as F
-from torch.optim.lr_scheduler import LambdaLR
 
 import pytorch_lightning as pl
 from torchmetrics.functional.classification.accuracy import accuracy
@@ -27,27 +26,6 @@ def seed_everything(seed):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
-
-# 修改后的自定义回调用于保存每个epoch的模型
-class EpochModelSaver(pl.Callback):
-    def __init__(self, save_dir, total_epochs=30):
-        super().__init__()
-        self.save_dir = save_dir
-        self.total_epochs = total_epochs
-        
-        # 确保保存目录存在
-        os.makedirs(save_dir, exist_ok=True)
-    
-    def on_train_epoch_end(self, trainer, pl_module):
-        current_epoch = trainer.current_epoch
-        
-        # 保存每个epoch的模型（从epoch 0到total_epochs-1）
-        if current_epoch < self.total_epochs:
-            # 保存完整的模型状态
-            model_path = os.path.join(self.save_dir, f'epoch_{current_epoch:02d}.pth')
-            torch.save(pl_module.model.state_dict(), model_path)
-            print(f"Model saved at epoch {current_epoch}: {model_path}")
-
 
 
 class LitPedGraph(pl.LightningModule):
@@ -80,11 +58,6 @@ class LitPedGraph(pl.LightningModule):
         return y
 
     def training_step(self, batch, batch_nb):
-
-        # 记录当前学习率（每次batch更新后）
-        current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-        self.log('learning_rate', current_lr, prog_bar=True, logger=True)
-
         x = batch[0]
         y = batch[1]
         f = batch[2] if self.frames else None
@@ -150,22 +123,15 @@ class LitPedGraph(pl.LightningModule):
         self.log('test_loss', loss, prog_bar=True)
         self.log('test_acc', acc * 100.0, prog_bar=True)
         return loss
-    # 衰减lr
+
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=0.01, weight_decay=1e-3)  # 初始lr=0.01
-    
-        def lr_lambda(current_step):
-        # 线性衰减公式: lr = start_lr - (start_lr - end_lr) * (current_step/total_steps)
-            progress = min(current_step / self.total_steps, 1.0)  # 确保不超过1.0
-            return 1.0 - progress * (1.0 - (0.001 / 0.01))  # 从1.0线性衰减到0.1 (0.001/0.01)
-    
+        optm = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-3)
         lr_scheduler = {
-        'scheduler': LambdaLR(optimizer, lr_lambda),
-        'interval': 'step',  # 每个batch更新
-        'frequency': 1,
-        'name': 'linear_lr_scheduler'
+            'name': 'OneCycleLR',
+            'scheduler': torch.optim.lr_scheduler.OneCycleLR(optm, max_lr=self.lr, div_factor=10.0, final_div_factor=1e4, total_steps=self.total_steps, verbose=False),
+            'interval': 'step', 'frequency': 1,
         }
-        return [optimizer], [lr_scheduler]
+        return [optm], [lr_scheduler]
 
 
 def data_loader(args):
@@ -214,22 +180,20 @@ def main(args):
         os.mkdir(args.logdir)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=args.logdir, monitor='val_acc', save_top_k=30,
-        filename='jaad23-{epoch:02d}-{val_acc:.3f}', mode='max', save_weights_only=True)
-    
-    lr_monitor = LearningRateMonitor(logging_interval='step')
-
-    # 添加epoch模型保存回调
-    epoch_saver = EpochModelSaver(
-        save_dir=os.path.join(args.logdir, 'epoch_models'),
-        total_epochs=args.epochs
+        dirpath=args.logdir,
+        filename='epoch_{epoch:02d}',   # 你可以改成其他格式
+        save_top_k=-1,                  # -1 表示保存所有 epoch
+        every_n_epochs=1,               # 每个 epoch 都保存
+        save_weights_only=True         # 不设置为 True，这样保存完整 ckpt
     )
+
+    lr_monitor = LearningRateMonitor(logging_interval='step')
 
     trainer = pl.Trainer(
         accelerator='gpu',
         devices='auto',
         max_epochs=args.epochs,
-        callbacks=[checkpoint_callback, lr_monitor, epoch_saver],
+        callbacks=[checkpoint_callback, lr_monitor],
         precision='16-mixed',
     )
 
@@ -249,19 +213,19 @@ def main(args):
 if __name__ == "__main__":
     torch.cuda.empty_cache()
     parser = argparse.ArgumentParser("Pedestrian prediction crossing")
-    parser.add_argument('--logdir', type=str, default="./data/jaad-23-IVSFT-h2d/", help="logger directory for tensorboard")
+    parser.add_argument('--logdir', type=str, default="./data/jaad-23-IVSFT/", help="logger directory for tensorboard")
     parser.add_argument('--device', type=str, default=0, help="GPU")
     parser.add_argument('--epochs', type=int, default=30, help="Number of epochs to train")
-    parser.add_argument('--lr', type=float, default=0.008, help='learning rate to train')
+    parser.add_argument('--lr', type=float, default=0.005, help='learning rate to train')
     parser.add_argument('--data_path', type=str, default='./data/JAAD', help='Path to the train and test data')
-    parser.add_argument('--batch_size', type=int, default=8, help="Batch size for training and test")
+    parser.add_argument('--batch_size', type=int, default=16, help="Batch size for training and test")
     parser.add_argument('--num_workers', type=int, default=0, help="Number of workers for the dataloader")
     parser.add_argument('--frames', type=bool, default=False, help='Activate the use of raw frames')
     parser.add_argument('--velocity', type=bool, default=False, help='Activate the use of the OBD and GPS velocity')
     parser.add_argument('--seg', type=bool, default=False, help='Use the segmentation map')
     parser.add_argument('--forcast', type=bool, default=False, help='Use the human pose forecasting data')
     parser.add_argument('--time_crop', type=bool, default=False)
-    parser.add_argument('--H3D', type=bool, default=False, help='Use 3D human keypoints')
+    parser.add_argument('--H3D', type=bool, default=True, help='Use 3D human keypoints')
     parser.add_argument('--jaad_path', type=str, default='./JAAD')
     parser.add_argument('--balance', type=bool, default=True, help='Balance or not the dataset')
     parser.add_argument('--bh', type=str, default='all', help='all or bh, if use all samples or only samples with behavior labels')
