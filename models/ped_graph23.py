@@ -8,70 +8,95 @@ import numpy as np
 class SpatialAttention(nn.Module):
     def __init__(self, channels):
         super(SpatialAttention, self).__init__()
+        # 使用更合适的池化策略
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        # 添加卷积层来学习空间权重
+        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        avg_out = self.avg_pool(x)
-        return self.sigmoid(avg_out)
+        # x shape: [N, C, T, V]
+        N, C, T, V = x.size()
+        
+        # 重塑为 [N*C, T, V] 以便进行空间注意力
+        x_reshaped = x.view(N * C, T, V).unsqueeze(1)  # [N*C, 1, T, V]
+        
+        # 计算平均池化和最大池化
+        avg_out = torch.mean(x_reshaped, dim=1, keepdim=True)  # [N*C, 1, T, V]
+        max_out, _ = torch.max(x_reshaped, dim=1, keepdim=True)  # [N*C, 1, T, V]
+        
+        # 连接平均和最大特征
+        combined = torch.cat([avg_out, max_out], dim=1)  # [N*C, 2, T, V]
+        
+        # 应用卷积和sigmoid
+        attention = self.sigmoid(self.conv(combined))  # [N*C, 1, T, V]
+        
+        # 恢复原始形状
+        attention = attention.view(N, C, T, V)
+        
+        return attention
 
 class TemporalAttention(nn.Module):
     def __init__(self, channels):
         super(TemporalAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        # 改用1D卷积来处理时间维度
+        self.conv1d = nn.Conv1d(channels, channels // 8, 1)
+        self.conv1d_out = nn.Conv1d(channels // 8, channels, 1)
         self.sigmoid = nn.Sigmoid()
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
-        # 这里假设输入是 4D 张量 (batch_size, channels, time_steps, nodes)
-        # 我们先 reshape 成 3D 张量 (batch_size, channels * nodes, time_steps)
+        # x shape: [N, C, T, V]
         N, C, T, V = x.size()
-
-         # 重新调整维度为 (batch_size, channels * nodes, time_steps)
-        x = x.view(N, C * V, T)  # 将输入从 4D 转换为 3D 张量
-        avg_out = self.avg_pool(x)  # 对时间维度进行平均池化
-        avg_out = avg_out.unsqueeze(-1)  # 添加额外的维度，以便后续广播
-     
-        avg_out = avg_out.view(avg_out.shape[0], avg_out.shape[1], 1)  # 变成 [32, 608, 1]
-
-        # 扩展到 (batch_size, channels * nodes, time_steps)
-        avg_out = avg_out.expand_as(x)  # 将池化输出扩展为与输入张量相同的时间维度
-        # 恢复成四维：[batch_size, channels, time_steps, nodes]
-        avg_out = avg_out.reshape(N, C, T, V)
-        return self.sigmoid(avg_out)
+        
+        # 全局平均池化在空间维度上
+        x_pooled = torch.mean(x, dim=3)  # [N, C, T]
+        
+        # 应用1D卷积
+        out = self.relu(self.conv1d(x_pooled))  # [N, C//8, T]
+        out = self.sigmoid(self.conv1d_out(out))  # [N, C, T]
+        
+        # 扩展到原始维度
+        out = out.unsqueeze(-1).expand_as(x)  # [N, C, T, V]
+        
+        return out
 
 class ChannelAttention(nn.Module):
-    def __init__(self, channels):
+    def __init__(self, channels, reduction=16):
         super(ChannelAttention, self).__init__()
-        self.fc1 = nn.Linear(channels, channels)  
-        self.fc2 = nn.Linear(channels, channels)  
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        # 使用更合理的降维比例
+        hidden_channels = max(channels // reduction, 1)
+        
+        self.shared_mlp = nn.Sequential(
+            nn.Linear(channels, hidden_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_channels, channels)
+        )
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        avg_out = torch.mean(x, dim=(2, 3), keepdim=False)  # 对 H 和 W 维度求平均
-        # print("avg_out shape:", avg_out.shape)  # 打印avg_out的形状
-        avg_out = avg_out.view(avg_out.size(0), -1)  # 展平为 (batch_size, channels)
-        # print("avg_out after reshape shape:", avg_out.shape)  # 打印 reshape 后的 avg_out 形状
-        fc_out = self.fc2(self.fc1(avg_out))  # fc1 -> fc2
-
-        # try:
-        #     # 确保fc1的输入输出维度一致
-        #     fc1_out = self.fc1(avg_out)
-        #     print("fc1 output shape:", fc1_out.shape)
-        # except Exception as e:
-        #     print(f"Error in fc1: {e}")
-        #     fc1_out = torch.zeros_like(avg_out)  # 设置默认值，避免后续报错
-
-        # try:
-        #     # fc2的输入和输出维度应与fc1一致
-        #     fc2_out = self.fc2(fc1_out)
-        #     print("fc2 output shape:", fc2_out.shape)
-        # except Exception as e:
-        #     print(f"Error in fc2: {e}")
-        #     fc2_out = torch.zeros_like(fc1_out)  # 设置默认值，避免后续报错
-
-        # return self.sigmoid(fc2_out).view(x.size(0), x.size(1), 1, 1)  # 返回输出
+        # x shape: [N, C, T, V]
+        N, C, T, V = x.size()
         
-        return self.sigmoid(fc_out).view(-1, avg_out.size(1), 1, 1)  # 输出形状应该是 (batch_size, channels, 1, 1)
+        # 全局平均池化和最大池化
+        avg_out = self.avg_pool(x).view(N, C)  # [N, C]
+        max_out = self.max_pool(x).view(N, C)  # [N, C]
+        
+        # 通过共享MLP
+        avg_out = self.shared_mlp(avg_out)
+        max_out = self.shared_mlp(max_out)
+        
+        # 合并并应用sigmoid
+        out = self.sigmoid(avg_out + max_out)  # [N, C]
+        
+        # 扩展到原始维度
+        out = out.view(N, C, 1, 1).expand_as(x)
+        
+        return out   
 
 class pedMondel(nn.Module):
     # 初始化方法，接受几个参数：
