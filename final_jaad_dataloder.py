@@ -238,7 +238,7 @@ def main():
         ])
     
     
-    tr_data = DataSet(path=data_path,  jaad_path=jaad_path, frame=True, vel=True, balance= False, bh='all', transforms=transform, pcpa=pcpa)
+    tr_data = DataSet(path=data_path,  jaad_path=jaad_path, frame=True, vel=True, balance= False, bh='all', transforms=transform, pcpa=pcpa, h3d=False)
     iter_ = tqdm(range(len(tr_data)))
     labels = np.zeros([len(tr_data), 3])
 
