@@ -253,7 +253,7 @@ def main(args):
     print(f'balance data: {args.balance}, bh: {args.bh}, last2: {args.last2}, Model: ' + args.ckpt.split('/')[-2], )
     print(*['-']*30)
     print('Models statistics')
-    print(stats_fn.results)
+    print(stats_fn.results.to_string())
     
     no_xing = 100 * np.mean((pedgraph_pred_all[:, 0]>0.5) == stats_fn.one_hot_y[:, 0])
     xing = 100 * np.mean((pedgraph_pred_all[:, 1]>0.5) == stats_fn.one_hot_y[:, 1])
