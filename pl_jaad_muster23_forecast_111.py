@@ -218,7 +218,7 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=30, help="Number of epochs to train")
     parser.add_argument('--lr', type=float, default=0.005, help='learning rate to train')
     parser.add_argument('--data_path', type=str, default='./data/JAAD', help='Path to the train and test data')
-    parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training and test")
+    parser.add_argument('--batch_size', type=int, default=2, help="Batch size for training and test")
     parser.add_argument('--num_workers', type=int, default=0, help="Number of workers for the dataloader")
     parser.add_argument('--frames', type=bool, default=False, help='Activate the use of raw frames')
     parser.add_argument('--velocity', type=bool, default=False, help='Activate the use of the OBD and GPS velocity')
