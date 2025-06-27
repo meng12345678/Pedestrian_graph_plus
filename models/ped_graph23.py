@@ -34,33 +34,28 @@ class SpatialAttention(nn.Module):
         
         # 恢复原始形状
         attention = attention.view(N, C, T, V)
-        
+        # print("spatial_att:", attention.mean().item(), attention.std().item())
+
         return attention
 
 class TemporalAttention(nn.Module):
     def __init__(self, channels):
         super(TemporalAttention, self).__init__()
-        # 改用1D卷积来处理时间维度
-        self.conv1d = nn.Conv1d(channels, channels // 8, 1)
-        self.conv1d_out = nn.Conv1d(channels // 8, channels, 1)
+        self.mlp = nn.Sequential(
+            nn.Conv1d(channels, channels // 4, 1),
+            nn.InstanceNorm1d(channels // 4),
+            nn.ReLU(),  
+            nn.Conv1d(channels // 4, channels, 1)
+        )
         self.sigmoid = nn.Sigmoid()
-        self.relu = nn.ReLU(inplace=True)
-
+        
     def forward(self, x):
         # x shape: [N, C, T, V]
-        N, C, T, V = x.size()
-        
-        # 全局平均池化在空间维度上
         x_pooled = torch.mean(x, dim=3)  # [N, C, T]
-        
-        # 应用1D卷积
-        out = self.relu(self.conv1d(x_pooled))  # [N, C//8, T]
-        out = self.sigmoid(self.conv1d_out(out))  # [N, C, T]
-        
-        # 扩展到原始维度
-        out = out.unsqueeze(-1).expand_as(x)  # [N, C, T, V]
-        
-        return out
+        att = self.sigmoid(self.mlp(x_pooled))  # [N, C, T]
+        att = att.unsqueeze(-1).expand_as(x)  # [N, C, T, V]
+        # print("temporal_att:", att.mean().item(), att.std().item())
+        return att
 
 class ChannelAttention(nn.Module):
     def __init__(self, channels, reduction=16):
@@ -77,6 +72,7 @@ class ChannelAttention(nn.Module):
             nn.Linear(hidden_channels, channels)
         )
         self.sigmoid = nn.Sigmoid()
+
 
     def forward(self, x):
         # x shape: [N, C, T, V]
@@ -95,7 +91,8 @@ class ChannelAttention(nn.Module):
         
         # 扩展到原始维度
         out = out.view(N, C, 1, 1).expand_as(x)
-        
+        # print("channel_att:", out.mean().item(), out.std().item())
+
         return out   
 
 class pedMondel(nn.Module):
@@ -106,7 +103,7 @@ class pedMondel(nn.Module):
     # h3d: 是否启用3D人体关键点数据（如果为True，则使用3D关键点数据，默认值为True）。
     # nodes: 节点数量，通常表示图中的关键点数量，默认为19。
     # n_clss: 类别数，默认为1。
-    def __init__(self, frames, vel=False, seg=False, h3d=False, nodes=19, n_clss=1):
+    def __init__(self, frames, vel=False, seg=False, h3d=True, nodes=19, n_clss=1):
         super(pedMondel, self).__init__()
  
         self.h3d = h3d # 3D人体关键点数据是否启用。True表示启用3D数据，否则使用2D数据。
@@ -118,48 +115,41 @@ class pedMondel(nn.Module):
         self.ch1, self.ch2 = 32, 64
         i_ch = 4 if seg else 3
 
-        self.data_bn = nn.BatchNorm1d(self.ch * nodes)  # 创建一个批归一化层，用于1D数据，输入通道为ch*nodes
-        bn_init(self.data_bn, 1) # 初始化批归一化层，通常会设置初始化方法
-        self.drop = nn.Dropout(0.25)  
-        A = np.stack([np.eye(nodes)] * 3, axis=0) # 创建一个3x(nodes x nodes)的单位矩阵（邻接矩阵），用于图神经网络或其他图结构计算。
+        self.data_bn = nn.InstanceNorm1d(self.ch * nodes, affine=True, track_running_stats=False)
+        bn_init(self.data_bn, 1)
+        self.drop = nn.Dropout(0.25)
+        A = np.stack([np.eye(nodes)] * 3, axis=0)
         
-        if frames: # 如果使用时间帧（frames为True）
+        if frames:
             self.conv0 = nn.Sequential(
-                nn.Conv2d(i_ch, self.ch1, kernel_size=3, stride=1, padding=0, bias=False), # 定义第一个2D卷积层，输入通道为i_ch（3或4），输出通道为self.ch1（32），卷积核大小为3x3，不使用偏置
-                nn.BatchNorm2d(self.ch1), nn.SiLU())
-        if vel: # 如果使用速度特征（vel为True）  
+                nn.Conv2d(i_ch, self.ch1, kernel_size=3, stride=1, padding=0, bias=False), 
+                nn.InstanceNorm2d(self.ch1, affine=True, track_running_stats=False), nn.SiLU())
+        if vel:
             self.v0 = nn.Sequential(
-                nn.Conv1d(2, self.ch1, 3, bias=False), 
-                nn.BatchNorm1d(self.ch1), nn.SiLU()) # 定义一个1D卷积层，输入通道为2（速度信息x和y），输出通道为self.ch1（32），卷积核大小为3。
+                nn.Conv1d(2, self.ch1, 3, bias=False),nn.InstanceNorm1d(self.ch1, affine=True, track_running_stats=False), nn.SiLU())
         # ----------------------------------------------------------------------------------------------------
-        # 创建一个TCN_GCN_unit（已经包含了按GCN→注意力→TCN顺序的处理），
-        # 输入通道为self.ch（由h3d决定，3D数据为4，2D为3），输出通道为self.ch1（32），
-        # 使用的邻接矩阵为A（图的邻接矩阵），residual=False表示不使用残差连接。
         self.l1 = TCN_GCN_unit(self.ch, self.ch1, A, residual=False)
 
         if frames:
             self.conv1 = nn.Sequential(
-                nn.Conv2d(self.ch1, self.ch1, kernel_size=3, stride=1, padding=0, bias=False), # 定义第二个2D卷积层，输入和输出通道都是self.ch1（32），卷积核大小为3x3。
-                nn.BatchNorm2d(self.ch1), nn.SiLU())
+                nn.Conv2d(self.ch1, self.ch1, kernel_size=3, stride=1, padding=0, bias=False), 
+                nn.InstanceNorm2d(self.ch1, affine=True, track_running_stats=False), nn.SiLU())
         if vel:
             self.v1 = nn.Sequential(
-                nn.Conv1d(self.ch1, self.ch1, 3, bias=False),  # 定义第二个1D卷积层，输入和输出通道为self.ch1（32），卷积核大小为3。
-                nn.BatchNorm1d(self.ch1), nn.SiLU())
+                nn.Conv1d(self.ch1, self.ch1, 3, bias=False), 
+                nn.InstanceNorm1d(self.ch1, affine=True, track_running_stats=False), nn.SiLU())
         # ----------------------------------------------------------------------------------------------------
-        # 创建一个TCN_GCN_unit（已经包含了按GCN→注意力→TCN顺序的处理），
-        # 输入通道为self.ch1（32），输出通道为self.ch2（64），
-        # 使用的邻接矩阵为A（图的邻接矩阵）。
         self.l2 = TCN_GCN_unit(self.ch1, self.ch2, A)
 
         if frames:
             self.conv2 = nn.Sequential(
-                nn.Conv2d(self.ch1, self.ch2, kernel_size=2, stride=1, padding=0, bias=False),  # 定义第三个2D卷积层，输入通道为self.ch1（32），输出通道为self.ch2（64），卷积核大小为2x2。
-                nn.BatchNorm2d(self.ch2), nn.SiLU())
+                nn.Conv2d(self.ch1, self.ch2, kernel_size=2, stride=1, padding=0, bias=False), 
+                nn.InstanceNorm2d(self.ch2, affine=True, track_running_stats=False), nn.SiLU())
             
         if vel:
             self.v2 = nn.Sequential(
-                nn.Conv1d(self.ch1, self.ch2, kernel_size=2, bias=False), # 定义第三个1D卷积层，输入通道为self.ch1（32），输出通道为self.ch2（64），卷积核大小为2。
-                nn.BatchNorm1d(self.ch2), nn.SiLU())
+                nn.Conv1d(self.ch1, self.ch2, kernel_size=2, bias=False), 
+                nn.InstanceNorm1d(self.ch2, affine=True, track_running_stats=False),nn.SiLU())
         # ----------------------------------------------------------------------------------------------------
         # self.l3 = TCN_GCN_unit(self.ch2, self.ch2, A)
 
@@ -179,6 +169,13 @@ class pedMondel(nn.Module):
         # 定义一个自适应平均池化层 (AdaptiveAvgPool2d)，
         # 它会将输入的大小池化到指定的输出大小，这里输出大小为 (1, 1)，
         # 即将每个特征图的空间维度（高和宽）压缩为1，从而获得每个特征图的全局平均值。
+
+        self.att = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(self.ch2, self.ch2, bias=False),
+            nn.LayerNorm(self.ch2), 
+            nn.Sigmoid()
+        )
 
         self.linear = nn.Linear(self.ch2, self.n_clss)
         # 定义一个全连接层，用于将特征图的输出映射到最终的分类数 `self.n_clss`。
@@ -260,9 +257,8 @@ class pedMondel(nn.Module):
         # --------------------------
 
         x1 = self.gap(x1).squeeze(-1)
-        # x1 经过池化 gap: torch.Size([32, 64, 1])
-        # print(f"x1 after gap: {x1.shape}")
         x1 = x1.squeeze(-1)
+        x1 = self.att(x1).mul(x1) + x1
         x1 = self.drop(x1)
         x1 = self.linear(x1)
 
@@ -291,13 +287,13 @@ def conv_branch_init(conv, branches):
 
 
 class unit_tcn(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=5, stride=1): 
+    def __init__(self, in_channels, out_channels, kernel_size=5, stride=1):
         super(unit_tcn, self).__init__()
         pad = int((kernel_size - 1) / 2)
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=(kernel_size, 1), padding=(pad, 0),
-                              stride=(stride, 1)) # 定义二维卷积层，卷积核大小为 (kernel_size, 1)，仅在高度方向使用 padding 和 stride
+                              stride=(stride, 1))
 
-        self.bn = nn.BatchNorm2d(out_channels)
+        self.bn = nn.InstanceNorm2d(out_channels, affine=True, track_running_stats=False)
         self.relu = nn.ReLU(inplace=True)
         conv_init(self.conv)
         bn_init(self.bn, 1)
@@ -328,18 +324,18 @@ class unit_gcn(nn.Module):
         if in_channels != out_channels:
             self.down = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, 1),
-                nn.BatchNorm2d(out_channels)
+                nn.InstanceNorm2d(out_channels, affine=True, track_running_stats=False)
             )
         else:
             self.down = lambda x: x
 
-        self.bn = nn.BatchNorm2d(out_channels)
+        self.bn = nn.InstanceNorm2d(out_channels, affine=True, track_running_stats=False)
         self.relu = nn.ReLU(inplace=True)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 conv_init(m)
-            elif isinstance(m, nn.BatchNorm2d):
+            elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.InstanceNorm1d, nn.InstanceNorm2d)):
                 bn_init(m, 1)
         bn_init(self.bn, 1e-6)
         for i in range(self.num_subset):
@@ -374,7 +370,12 @@ class unit_gcn(nn.Module):
         return y
 
 class TCN_GCN_unit(nn.Module): 
-    def __init__(self, in_channels, out_channels, A, stride=1, residual=True, adaptive=True):
+    def __init__(self, in_channels, out_channels, A, stride=1, residual=True, adaptive=True, 
+                    #  gcn_dropout=0.1, 
+                    #  attention_dropout=0.1, 
+                    #  tcn_dropout=0.1, 
+                    #  final_dropout=0.3
+                     ):
         super(TCN_GCN_unit, self).__init__()
         # 定义第一个图卷积层
         self.gcn1 = unit_gcn(in_channels, out_channels, A, adaptive=adaptive)  
@@ -385,6 +386,12 @@ class TCN_GCN_unit(nn.Module):
         # 定义第一个时间卷积层
         self.tcn1 = unit_tcn(out_channels, out_channels, stride=stride)  
         self.relu = nn.ReLU(inplace=True)
+
+        # # 为不同位置添加不同的dropout层
+        # self.gcn_dropout = nn.Dropout(gcn_dropout)           # GCN后的dropout
+        # self.attention_dropout = nn.Dropout(attention_dropout) # 通道注意力后的dropout
+        # self.tcn_dropout = nn.Dropout(tcn_dropout)           # TCN后的dropout
+        # self.final_dropout = nn.Dropout(final_dropout)       # 最后sum+relu后的dropout
 
         if not residual:
             self.residual = lambda x: 0
@@ -397,7 +404,9 @@ class TCN_GCN_unit(nn.Module):
 
     def forward(self, x):
         # 1. 先应用GCN
-        gcn_out = self.gcn1(x)
+        gcn_out = self.gcn1(x)  
+        # # 在GCN后添加dropout（较低的dropout率，保持更多信息）
+        # gcn_out = self.gcn_dropout(gcn_out)
         
         # 2. 然后依次应用三个注意力模块
         # 空间注意力
@@ -407,14 +416,20 @@ class TCN_GCN_unit(nn.Module):
         # 时间注意力
         temporal_att = self.temporal_attention(gcn_out)
         gcn_out = gcn_out * temporal_att
-        
+
         # 通道注意力
         channel_att = self.channel_attention(gcn_out)
         gcn_out = gcn_out * channel_att
-        
+        # # 在通道注意力后添加dropout（中等dropout率）
+        # gcn_out = self.attention_dropout(gcn_out)
+
         # 3. 最后应用TCN
         y = self.tcn1(gcn_out)
+        # # 在TCN后添加dropout（较高的dropout率，防止过拟合）
+        # y = self.tcn_dropout(y)
         
         # 添加残差连接并应用ReLU
         y = self.relu(y + self.residual(x))
+        # # 在最后的sum+relu后添加dropout（较低的dropout率，保持输出稳定）
+        # y = self.final_dropout(y)
         return y
