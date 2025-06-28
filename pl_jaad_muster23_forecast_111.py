@@ -229,7 +229,7 @@ if __name__ == "__main__":
     parser.add_argument('--time_crop', type=bool, default=False)
     parser.add_argument('--H3D', type=bool, default=True, help='Use 3D human keypoints')
     parser.add_argument('--jaad_path', type=str, default='./JAAD')
-    parser.add_argument('--balance', type=bool, default=True, help='Balance or not the dataset')
+    parser.add_argument('--balance', type=bool, default=False, help='Balance or not the dataset')
     parser.add_argument('--bh', type=str, default='all', help='all or bh, if use all samples or only samples with behavior labels')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--auto_lr_find', action='store_true', help='Enable auto learning rate finder')
