@@ -68,7 +68,8 @@ class LitPedGraph(pl.LightningModule):
             x = x[:, :, -crop_size:]
             
         logits = self(x, f, v)
-        w = None if self.balance else self.tr_weight
+        # w = None if self.balance else self.tr_weight
+        w = None if self.balance else self.tr_weight.to(y.device)
         
         y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
         y_onehot.scatter_(1, y.long(), 1)
@@ -88,7 +89,8 @@ class LitPedGraph(pl.LightningModule):
         v = batch[3] if self.velocity else None
 
         logits = self(x, f, v)
-        w = None if self.balance else self.val_weight
+        # w = None if self.balance else self.val_weight
+        w = None if self.balance else self.val_weight.to(y.device)
         
         y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
         y_onehot.scatter_(1, y.long(), 1)
