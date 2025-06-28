@@ -47,17 +47,20 @@ class LitPedGraph(pl.LightningModule):
         device = self.model.linear.weight.device
 
         tr_nsamples = [1025, 4778, 17582]
-        self.tr_weight = torch.from_numpy(np.min(tr_nsamples) / tr_nsamples).float().to(device)
+        # self.tr_weight = torch.from_numpy(np.min(tr_nsamples) / tr_nsamples).float().to(device)
+        self.tr_weight = torch.FloatTensor([0.5, 1.0, 0.2]).to(device)
         te_nsamples = [1871, 3204, 13037]
-        self.te_weight = torch.from_numpy(np.min(te_nsamples) / te_nsamples).float().to(device)
+        # self.te_weight = torch.from_numpy(np.min(te_nsamples) / te_nsamples).float().to(device)
+        self.te_weight = torch.FloatTensor([0.5, 1.0, 0.2]).to(device)
         val_nsamples = [176, 454, 2772]
-        self.val_weight = torch.from_numpy(np.min(val_nsamples) / val_nsamples).float().to(device)
+        # self.val_weight = torch.from_numpy(np.min(val_nsamples) / val_nsamples).float().to(device)
+        self.val_weight = torch.FloatTensor([0.5, 1.0, 0.2]).to(device)
         
     def forward(self, kp, f, v):
         y = self.model(kp, f, v)
         return y
 
-    def training_step(self, batch, batch_nb):
+    def training_step(self, batch, batch_idx):
         x = batch[0]
         y = batch[1]
         f = batch[2] if self.frames else None
@@ -71,9 +74,19 @@ class LitPedGraph(pl.LightningModule):
         # w = None if self.balance else self.tr_weight
         w = None if self.balance else self.tr_weight.to(y.device)
         
-        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
-        y_onehot.scatter_(1, y.long(), 1)
-        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
+        # y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        # y_onehot.scatter_(1, y.long(), 1)
+        # loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
+        y = y.view(-1)  # 保证是 [B]
+        loss = F.cross_entropy(logits, y.long(), weight=w)  # w 是 [3]
+
+            # 👇只打印第一个 batch 的信息
+        if batch_idx == 0:
+            print("=== Debug Info ===")
+            print("Current loss value:", loss.item())
+            print("Current class weights:", w)
+            print("y batch:", y[:10].tolist())  # 只看前10个标签值
+            print("logits shape:", logits.shape)
         
         preds = logits.softmax(1).argmax(1)
         #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
@@ -92,9 +105,11 @@ class LitPedGraph(pl.LightningModule):
         # w = None if self.balance else self.val_weight
         w = None if self.balance else self.val_weight.to(y.device)
         
-        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
-        y_onehot.scatter_(1, y.long(), 1)
-        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
+        # y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        # y_onehot.scatter_(1, y.long(), 1)
+        # loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
+        y = y.view(-1)  # 保证是 [B]
+        loss = F.cross_entropy(logits, y.long(), weight=w)  # w 是 [3]
 
         preds = logits.softmax(1).argmax(1)
         #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
@@ -113,9 +128,11 @@ class LitPedGraph(pl.LightningModule):
         logits = self(x, f, v)
         w = None if self.balance else self.te_weight
         
-        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
-        y_onehot.scatter_(1, y.long(), 1)
-        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
+        # y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        # y_onehot.scatter_(1, y.long(), 1)
+        # loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
+        y = y.view(-1)  # 保证是 [B]
+        loss = F.cross_entropy(logits, y.long(), weight=w)  # w 是 [3]
 
         preds = logits.softmax(1).argmax(1)
         #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
@@ -220,7 +237,7 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=30, help="Number of epochs to train")
     parser.add_argument('--lr', type=float, default=0.005, help='learning rate to train')
     parser.add_argument('--data_path', type=str, default='./data/JAAD', help='Path to the train and test data')
-    parser.add_argument('--batch_size', type=int, default=2, help="Batch size for training and test")
+    parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training and test")
     parser.add_argument('--num_workers', type=int, default=0, help="Number of workers for the dataloader")
     parser.add_argument('--frames', type=bool, default=False, help='Activate the use of raw frames')
     parser.add_argument('--velocity', type=bool, default=False, help='Activate the use of the OBD and GPS velocity')
