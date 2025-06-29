@@ -28,27 +28,8 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-
-    def forward(self, inputs, targets):
-        alpha = self.alpha.to(inputs.device) if self.alpha is not None else None
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none', weight=alpha)
-        pt = torch.exp(-ce_loss)
-        focal_loss = (1 - pt) ** self.gamma * ce_loss
-
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
-
 class LitPedGraph(pl.LightningModule):
+
     def __init__(self, args, len_tr):
         super(LitPedGraph, self).__init__()
         self.balance = args.balance
@@ -63,61 +44,93 @@ class LitPedGraph(pl.LightningModule):
 
         self.model = pedMondel(args.frames, args.velocity, seg=args.seg, h3d=args.H3D, n_clss=3)
 
-        # 权重设置，可调节 alpha 比例
-        self.alpha = torch.tensor([0.7, 1.0, 0.5])
-        self.criterion = FocalLoss(alpha=self.alpha, gamma=2.0)
+        device = self.model.linear.weight.device
 
+        tr_nsamples = [1025, 4778, 17582]
+        self.tr_weight = torch.from_numpy(np.min(tr_nsamples) / tr_nsamples).float().to(device)
+        te_nsamples = [1871, 3204, 13037]
+        self.te_weight = torch.from_numpy(np.min(te_nsamples) / te_nsamples).float().to(device)
+        val_nsamples = [176, 454, 2772]
+        self.val_weight = torch.from_numpy(np.min(val_nsamples) / val_nsamples).float().to(device)
+        
     def forward(self, kp, f, v):
-        return self.model(kp, f, v)
+        y = self.model(kp, f, v)
+        return y
 
     def training_step(self, batch, batch_nb):
-        x, y, f, v = batch[0], batch[1], batch[2] if self.frames else None, batch[3] if self.velocity else None
+        x = batch[0]
+        y = batch[1]
+        f = batch[2] if self.frames else None
+        v = batch[3] if self.velocity else None
 
-        if torch.rand(1).item() > 0.5 and self.time_crop:
-            crop_size = torch.randint(2, 21, (1,)).item()
+        if np.random.randint(10) >= 5 and self.time_crop:
+            crop_size = np.random.randint(2, 21)
             x = x[:, :, -crop_size:]
-
+            
         logits = self(x, f, v)
-        loss = self.criterion(logits, y.view(-1).long())
-
+        w = None if self.balance else self.tr_weight
+        
+        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        y_onehot.scatter_(1, y.long(), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
+        
         preds = logits.softmax(1).argmax(1)
-        acc = accuracy(preds, y.view(-1).long(), task='multiclass', num_classes=3)
+        #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
+        acc = accuracy(preds.view(-1).long(), y.view(-1).long(), task='multiclass', num_classes=3)
         self.log('train_loss', loss, prog_bar=True)
         self.log('train_acc', acc * 100.0, prog_bar=True)
         return loss
-
+    
     def validation_step(self, batch, batch_nb):
-        x, y, f, v = batch[0], batch[1], batch[2] if self.frames else None, batch[3] if self.velocity else None
+        x = batch[0]
+        y = batch[1]
+        f = batch[2] if self.frames else None
+        v = batch[3] if self.velocity else None
 
         logits = self(x, f, v)
-        loss = self.criterion(logits, y.view(-1).long())
+        w = None if self.balance else self.val_weight
+        
+        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        y_onehot.scatter_(1, y.long(), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
 
         preds = logits.softmax(1).argmax(1)
-        acc = accuracy(preds, y.view(-1).long(), task='multiclass', num_classes=3)
+        #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
+        acc = accuracy(preds.view(-1).long(), y.view(-1).long(), task='multiclass', num_classes=3)
+
         self.log('val_loss', loss, prog_bar=True)
         self.log('val_acc', acc * 100.0, prog_bar=True)
         return loss
-
+    
     def test_step(self, batch, batch_nb):
-        x, y, f, v = batch[0], batch[1], batch[2] if self.frames else None, batch[3] if self.velocity else None
+        x = batch[0]
+        y = batch[1]
+        f = batch[2] if self.frames else None
+        v = batch[3] if self.velocity else None
 
         logits = self(x, f, v)
-        loss = self.criterion(logits, y.view(-1).long())
+        w = None if self.balance else self.te_weight
+        
+        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        y_onehot.scatter_(1, y.long(), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
 
         preds = logits.softmax(1).argmax(1)
-        acc = accuracy(preds, y.view(-1).long(), task='multiclass', num_classes=3)
+        #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
+        acc = accuracy(preds.view(-1).long(), y.view(-1).long(), task='multiclass', num_classes=3)
+
+        
         self.log('test_loss', loss, prog_bar=True)
         self.log('test_acc', acc * 100.0, prog_bar=True)
         return loss
 
     def configure_optimizers(self):
         optm = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-3)
-        lr_scheduler = {
-            'name': 'OneCycleLR',
-            'scheduler': torch.optim.lr_scheduler.OneCycleLR(optm, max_lr=self.lr, div_factor=10.0, final_div_factor=1e4, total_steps=self.total_steps, verbose=False),
-            'interval': 'step', 'frequency': 1,
-        }
+        lr_scheduler = {'name':'OneCycleLR', 'scheduler': 
+        torch.optim.lr_scheduler.OneCycleLR(optm, max_lr=self.lr, div_factor=10.0, total_steps=self.total_steps, verbose=False),
+        'interval': 'step', 'frequency': 1,}
         return [optm], [lr_scheduler]
+
 
 def data_loader(args):
     transform = A.Compose([
@@ -200,8 +213,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("Pedestrian prediction crossing")
     parser.add_argument('--logdir', type=str, default="./data/jaad-23-IVSFT/", help="logger directory for tensorboard")
     parser.add_argument('--device', type=str, default=0, help="GPU")
-    parser.add_argument('--epochs', type=int, default=30, help="Number of epochs to train")
-    parser.add_argument('--lr', type=float, default=0.005, help='learning rate to train')
+    parser.add_argument('--epochs', type=int, default=60, help="Number of epochs to train")
+    parser.add_argument('--lr', type=float, default=0.0005, help='learning rate to train')
     parser.add_argument('--data_path', type=str, default='./data/JAAD', help='Path to the train and test data')
     parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training and test")
     parser.add_argument('--num_workers', type=int, default=0, help="Number of workers for the dataloader")
@@ -212,7 +225,7 @@ if __name__ == "__main__":
     parser.add_argument('--time_crop', type=bool, default=False)
     parser.add_argument('--H3D', type=bool, default=True, help='Use 3D human keypoints')
     parser.add_argument('--jaad_path', type=str, default='./JAAD')
-    parser.add_argument('--balance', type=bool, default=False, help='Balance or not the dataset')
+    parser.add_argument('--balance', type=bool, default=True, help='Balnce or not the data set')
     parser.add_argument('--bh', type=str, default='all', help='all or bh, if use all samples or only samples with behavior labels')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--auto_lr_find', action='store_true', help='Enable auto learning rate finder')
