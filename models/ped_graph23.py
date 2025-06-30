@@ -14,29 +14,32 @@ class SpatialAttention(nn.Module):
         # 添加卷积层来学习空间权重
         self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
         self.sigmoid = nn.Sigmoid()
+        # self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # x shape: [N, C, T, V]
         N, C, T, V = x.size()
         
         # 重塑为 [N*C, T, V] 以便进行空间注意力
-        x_reshaped = x.view(N * C, T, V).unsqueeze(1)  # [N*C, 1, T, V]
+        # x_reshaped = x.view(N * C, T, V).unsqueeze(1)  # [N*C, 1, T, V]
         
         # 计算平均池化和最大池化
-        avg_out = torch.mean(x_reshaped, dim=1, keepdim=True)  # [N*C, 1, T, V]
-        max_out, _ = torch.max(x_reshaped, dim=1, keepdim=True)  # [N*C, 1, T, V]
+        avg_out = torch.mean(x, dim=1, keepdim=True)  # [N*C, 1, T, V]
+        max_out, _ = torch.max(x, dim=1, keepdim=True)  # [N*C, 1, T, V]
         
         # 连接平均和最大特征
         combined = torch.cat([avg_out, max_out], dim=1)  # [N*C, 2, T, V]
         
         # 应用卷积和sigmoid
         attention = self.sigmoid(self.conv(combined))  # [N*C, 1, T, V]
+        # attention = self.dropout(attention)  # ⬅ Dropout 加在 sigmoid 后
         
         # 恢复原始形状
-        attention = attention.view(N, C, T, V)
-        # print("spatial_att:", attention.mean().item(), attention.std().item())
+        # attention = attention.view(N, C, T, V)
+        
+        # return attention
+        return attention.expand_as(x)  # [N, C, T, V]
 
-        return attention
 
 class TemporalAttention(nn.Module):
     def __init__(self, channels):
@@ -48,11 +51,13 @@ class TemporalAttention(nn.Module):
             nn.Conv1d(channels // 4, channels, 1)
         )
         self.sigmoid = nn.Sigmoid()
+        # self.dropout = nn.Dropout(dropout)
         
     def forward(self, x):
         # x shape: [N, C, T, V]
         x_pooled = torch.mean(x, dim=3)  # [N, C, T]
         att = self.sigmoid(self.mlp(x_pooled))  # [N, C, T]
+        # att = self.dropout(att)  # ⬅ Dropout 加在注意力 mask 上
         att = att.unsqueeze(-1).expand_as(x)  # [N, C, T, V]
         # print("temporal_att:", att.mean().item(), att.std().item())
         return att
@@ -72,7 +77,7 @@ class ChannelAttention(nn.Module):
             nn.Linear(hidden_channels, channels)
         )
         self.sigmoid = nn.Sigmoid()
-
+        # self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # x shape: [N, C, T, V]
@@ -88,6 +93,7 @@ class ChannelAttention(nn.Module):
         
         # 合并并应用sigmoid
         out = self.sigmoid(avg_out + max_out)  # [N, C]
+        # out = self.dropout(out)  # ⬅ Dropout 加在权重上
         
         # 扩展到原始维度
         out = out.view(N, C, 1, 1).expand_as(x)
@@ -381,8 +387,13 @@ class TCN_GCN_unit(nn.Module):
         self.gcn1 = unit_gcn(in_channels, out_channels, A, adaptive=adaptive)  
         # 添加三个注意力模块
         self.spatial_attention = SpatialAttention(out_channels)
+        # dropout=0.1)
         self.temporal_attention = TemporalAttention(out_channels)
+        # dropout=0.1)
+        
         self.channel_attention = ChannelAttention(out_channels)
+        # dropout=0.1)
+        
         # 定义第一个时间卷积层
         self.tcn1 = unit_tcn(out_channels, out_channels, stride=stride)  
         self.relu = nn.ReLU(inplace=True)
