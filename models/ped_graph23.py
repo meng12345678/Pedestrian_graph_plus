@@ -30,7 +30,7 @@ class SpatialAttention(nn.Module):
 
 
 class TemporalAttention(nn.Module):
-    def __init__(self, channels):
+    def __init__(self, channels,dropout=0.1):
         super(TemporalAttention, self).__init__()
         self.mlp = nn.Sequential(
             nn.Conv1d(channels, channels // 4, 1),
@@ -39,19 +39,19 @@ class TemporalAttention(nn.Module):
             nn.Conv1d(channels // 4, channels, 1)
         )
         self.sigmoid = nn.Sigmoid()
-        # self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
         
     def forward(self, x):
         # x shape: [N, C, T, V]
         x_pooled = torch.mean(x, dim=3)  # [N, C, T]
         att = self.sigmoid(self.mlp(x_pooled))  # [N, C, T]
-        # att = self.dropout(att)  # ⬅ Dropout 加在注意力 mask 上
+        att = self.dropout(att)  # ⬅ Dropout 加在注意力 mask 上
         att = att.unsqueeze(-1).expand_as(x)  # [N, C, T, V]
         # print("temporal_att:", att.mean().item(), att.std().item())
         return att
 
 class ChannelAttention(nn.Module):
-    def __init__(self, channels, reduction=16):
+    def __init__(self, channels, reduction=16,dropout=0.1):
         super(ChannelAttention, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
@@ -65,7 +65,7 @@ class ChannelAttention(nn.Module):
             nn.Linear(hidden_channels, channels)
         )
         self.sigmoid = nn.Sigmoid()
-        # self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # x shape: [N, C, T, V]
@@ -81,7 +81,7 @@ class ChannelAttention(nn.Module):
         
         # 合并并应用sigmoid
         out = self.sigmoid(avg_out + max_out)  # [N, C]
-        # out = self.dropout(out)  # ⬅ Dropout 加在权重上
+        out = self.dropout(out)  # ⬅ Dropout 加在权重上
         
         # 扩展到原始维度
         out = out.view(N, C, 1, 1).expand_as(x)
@@ -172,8 +172,8 @@ class pedMondel(nn.Module):
         )
 
         self.linear = nn.Linear(self.ch2, self.n_clss)
-        # 定义一个全连接层，用于将特征图的输出映射到最终的分类数 `self.n_clss`。
-        # 这个层的输入维度为 `self.ch2`（64），输出维度为 `self.n_clss`（分类数）。
+        # 定义一个全连接层，用于将特征图的输出映射到最终的分类数 self.n_clss。
+        # 这个层的输入维度为 self.ch2（64），输出维度为 self.n_clss（分类数）。
         nn.init.normal_(self.linear.weight, 0, math.sqrt(2. / self.n_clss))
         # pooling sigmoid fucntion for image feature fusion
         self.pool_sigm_2d = nn.Sequential(
@@ -192,11 +192,11 @@ class pedMondel(nn.Module):
         N, C, T, V = kp.shape
         # 原始 kp ([32, 4, 32, 19]) 
         # print(f"Original kp shape: {kp.shape}")
-        kp = kp.permute(0, 1, 3, 2).contiguous().view(N, C * V, T)  # `kp` 交换维度，使得 `kp` 的形状变成 `(N, C * V, T)`，为了适应卷积操作（对关键点的时间序列进行卷积处理）
+        kp = kp.permute(0, 1, 3, 2).contiguous().view(N, C * V, T)  # kp 交换维度，使得 kp 的形状变成 (N, C * V, T)，为了适应卷积操作（对关键点的时间序列进行卷积处理）
         # kp交换维度后([32, 76, 32])
         # print(f"kp after permute and view: {kp.shape}")
-        kp = self.data_bn(kp) # 对 `kp` 应用批归一化（`data_bn` 是一个批归一化层），标准化输入数据
-        kp = kp.view(N, C, V, T).permute(0, 1, 3, 2).contiguous() # 将 `kp` 恢复回 `(N, C, V, T)` 形状，并通过 `permute` 交换维度，以便后续处理
+        kp = self.data_bn(kp) # 对 kp 应用批归一化（data_bn 是一个批归一化层），标准化输入数据
+        kp = kp.view(N, C, V, T).permute(0, 1, 3, 2).contiguous() # 将 kp 恢复回 (N, C, V, T) 形状，并通过 permute 交换维度，以便后续处理
         # kp 恢复维度[32, 4, 32, 19]
         # print(f"kp after reshape back: {kp.shape}")
 
@@ -213,12 +213,12 @@ class pedMondel(nn.Module):
 
         if self.frames:
             f1 = self.conv1(f1)   
-            x1 = x1 * self.pool_sigm_2d(f1)# 对 `f1` 应用池化并使用 Sigmoid 激活函数融合特征，再与 `x1` 相乘，作为加权融合的操作
+            x1 = x1 * self.pool_sigm_2d(f1)# 对 f1 应用池化并使用 Sigmoid 激活函数融合特征，再与 x1 相乘，作为加权融合的操作
             # x1 经过 frame 融合 ([32, 32, 32, 19])
             # print(f"x1 after frame fusion: {x1.shape}")
         if self.vel:   
             v1 = self.v1(v1)
-            x1 = x1 * self.pool_sigm_1d(v1).unsqueeze(-1) # 对 `v1` 应用池化并使用 Sigmoid 激活函数融合特征，再与 `x1` 相乘，作为加权融合的操作
+            x1 = x1 * self.pool_sigm_1d(v1).unsqueeze(-1) # 对 v1 应用池化并使用 Sigmoid 激活函数融合特征，再与 x1 相乘，作为加权融合的操作
             # x1 经过 velocity 融合: ([32, 32, 32, 19])
             # print(f"x1 after velocity fusion: {x1.shape}")      
         # --------------------------      
@@ -365,10 +365,10 @@ class unit_gcn(nn.Module):
 
 class TCN_GCN_unit(nn.Module): 
     def __init__(self, in_channels, out_channels, A, stride=1, residual=True, adaptive=True, 
-                    #  gcn_dropout=0.1, 
-                    #  attention_dropout=0.1, 
-                    #  tcn_dropout=0.1, 
-                    #  final_dropout=0.3
+                     gcn_dropout=0.1, 
+                     attention_dropout=0.1, 
+                     tcn_dropout=0.05, 
+                     final_dropout=0.2
                      ):
         super(TCN_GCN_unit, self).__init__()
         # 定义第一个图卷积层
@@ -386,10 +386,10 @@ class TCN_GCN_unit(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
         # # 为不同位置添加不同的dropout层
-        # self.gcn_dropout = nn.Dropout(gcn_dropout)           # GCN后的dropout
-        # self.attention_dropout = nn.Dropout(attention_dropout) # 通道注意力后的dropout
-        # self.tcn_dropout = nn.Dropout(tcn_dropout)           # TCN后的dropout
-        # self.final_dropout = nn.Dropout(final_dropout)       # 最后sum+relu后的dropout
+        self.gcn_dropout = nn.Dropout(gcn_dropout)           # GCN后的dropout
+        self.attention_dropout = nn.Dropout(attention_dropout) # 通道注意力后的dropout
+        self.tcn_dropout = nn.Dropout(tcn_dropout)           # TCN后的dropout
+        self.final_dropout = nn.Dropout(final_dropout)       # 最后sum+relu后的dropout
 
         if not residual:
             self.residual = lambda x: 0
@@ -404,7 +404,7 @@ class TCN_GCN_unit(nn.Module):
         # 1. 先应用GCN
         gcn_out = self.gcn1(x)  
         # # 在GCN后添加dropout（较低的dropout率，保持更多信息）
-        # gcn_out = self.gcn_dropout(gcn_out)
+        gcn_out = self.gcn_dropout(gcn_out)
         
         # 2. 然后依次应用三个注意力模块
         # 空间注意力
@@ -419,15 +419,15 @@ class TCN_GCN_unit(nn.Module):
         channel_att = self.channel_attention(gcn_out)
         gcn_out = gcn_out * channel_att
         # # 在通道注意力后添加dropout（中等dropout率）
-        # gcn_out = self.attention_dropout(gcn_out)
+        gcn_out = self.attention_dropout(gcn_out)
 
         # 3. 最后应用TCN
         y = self.tcn1(gcn_out)
         # # 在TCN后添加dropout（较高的dropout率，防止过拟合）
-        # y = self.tcn_dropout(y)
+        y = self.tcn_dropout(y)
         
         # 添加残差连接并应用ReLU
         y = self.relu(y + self.residual(x))
         # # 在最后的sum+relu后添加dropout（较低的dropout率，保持输出稳定）
-        # y = self.final_dropout(y)
-        return y
+        y = self.final_dropout(y)
+        return y 
