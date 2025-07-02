@@ -28,30 +28,6 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha  # 类别权重 (不使用时为 None)
-        self.gamma = gamma
-        self.reduction = reduction
-       
-
-    def forward(self, input, target):
-        BCE_loss = F.binary_cross_entropy_with_logits(input, target, reduction='none')
-        pt = torch.exp(-BCE_loss)
-        F_loss = (1 - pt) ** self.gamma * BCE_loss
-
-        if self.alpha is not None:
-            alpha_t = self.alpha.unsqueeze(0)  # shape [1, C]
-            F_loss = alpha_t * F_loss
-
-        if self.reduction == 'mean':
-            return F_loss.mean()
-        elif self.reduction == 'sum':
-            return F_loss.sum()
-        else:
-            return F_loss
-
 class LitPedGraph(pl.LightningModule):
 
     def __init__(self, args, len_tr):
@@ -65,7 +41,7 @@ class LitPedGraph(pl.LightningModule):
         self.frames = args.frames
         self.velocity = args.velocity
         self.time_crop = args.time_crop
-        self.loss_fn = FocalLoss(alpha=None, gamma=2.0)  # 不使用 class_weight
+   
 
         self.model = pedMondel(args.frames, args.velocity, seg=args.seg, h3d=args.H3D, n_clss=3)
 
@@ -93,14 +69,11 @@ class LitPedGraph(pl.LightningModule):
             x = x[:, :, -crop_size:]
             
         logits = self(x, f, v)
-        # w = None if self.balance else self.tr_weight
+        w = None if self.balance else self.tr_weight
         
-    # 构造 one-hot 标签
-        y_onehot = torch.zeros(y.size(0), 3).to(y.device)
-        y_onehot.scatter_(1, y.view(-1, 1).long(), 1)
-
-        # 使用 focal loss
-        loss = self.loss_fn(logits, y_onehot)
+        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        y_onehot.scatter_(1, y.long(), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
         
         preds = logits.softmax(1).argmax(1)
         #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
@@ -117,14 +90,11 @@ class LitPedGraph(pl.LightningModule):
         v = batch[3] if self.velocity else None
 
         logits = self(x, f, v)
-        # w = None if self.balance else self.val_weight
+        w = None if self.balance else self.val_weight
         
-    # 构造 one-hot 标签
-        y_onehot = torch.zeros(y.size(0), 3).to(y.device)
-        y_onehot.scatter_(1, y.view(-1, 1).long(), 1)
-
-        # 使用 focal loss
-        loss = self.loss_fn(logits, y_onehot)
+        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        y_onehot.scatter_(1, y.long(), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
 
         preds = logits.softmax(1).argmax(1)
         #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
@@ -141,14 +111,13 @@ class LitPedGraph(pl.LightningModule):
         v = batch[3] if self.velocity else None
 
         logits = self(x, f, v)
-        # w = None if self.balance else self.te_weight
+        w = None if self.balance else self.te_weight
+        # loss = F.cross_entropy(logits, y.view(-1).long(), weight=w)
         
-        # y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
-        # y_onehot.scatter_(1, y.long(), 1)
-        # loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
-        # 构造 one-hot 标签
-        y_onehot = torch.zeros(y.size(0), 3).to(y.device)
-        y_onehot.scatter_(1, y.view(-1, 1).long(), 1)
+        y_onehot = torch.FloatTensor(y.shape[0], 3).to(y.device).zero_()
+        y_onehot.scatter_(1, y.long(), 1)
+        loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
+
 
         # 使用 focal loss
         loss = self.loss_fn(logits, y_onehot)
