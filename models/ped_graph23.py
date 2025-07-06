@@ -3,91 +3,85 @@ import math
 import torch
 from torch import nn
 import numpy as np
+import torch.nn.functional as F
 
 # 3个新的注意力模块
 class SpatialAttention(nn.Module):
-    def __init__(self, channels,dropout=0.1):
+    def __init__(self, in_channels):
         super(SpatialAttention, self).__init__()
-        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
+        self.fs = nn.Conv1d(in_channels, 1, kernel_size=1, bias=False)
         self.sigmoid = nn.Sigmoid()
-        self.dropout = nn.Dropout(dropout)
-
+        
     def forward(self, x):
-        # x shape: [N, C, T, V]
-        N, C, T, V = x.size()
+        # x: (N, C, T, V)
+        # AvgPool: 对时间维度平均
+        avg_pooled = torch.mean(x, dim=2)  # (N, C, V)
         
-        # 修复：在通道维度上取平均和最大值
-        avg_out = torch.mean(x, dim=1, keepdim=True)  # [N, 1, T, V]
-        max_out, _ = torch.max(x, dim=1, keepdim=True)  # [N, 1, T, V]
+        # fs: 1-D卷积
+        attention_scores = self.fs(avg_pooled)  # (N, 1, V)
         
-        # 连接特征
-        combined = torch.cat([avg_out, max_out], dim=1)  # [N, 2, T, V]
+        # σ: Sigmoid激活
+        As = self.sigmoid(attention_scores)  # (N, 1, V)
         
-        # 应用卷积得到注意力权重
-        attention = self.sigmoid(self.conv(combined))  # [N, 1, T, V]
-        attention = self.dropout(attention)
-        return attention.expand_as(x)  # [N, C, T, V]
-
+        # 调整维度以匹配输入特征进行广播
+        # (N, 1, V) -> (N, 1, 1, V) 以便与 (N, C, T, V) 广播
+        As = As.unsqueeze(2)  # (N, 1, 1, V)
+        
+        return As  # 返回可广播的注意力权重
 
 class TemporalAttention(nn.Module):
-    def __init__(self, channels,dropout=0.1):
+    
+    def __init__(self, input_channels):
         super(TemporalAttention, self).__init__()
-        self.mlp = nn.Sequential(
-            nn.Conv1d(channels, channels // 4, 1),
-            nn.InstanceNorm1d(channels // 4),
-            nn.ReLU(),  
-            nn.Conv1d(channels // 4, channels, 1)
-        )
-        self.sigmoid = nn.Sigmoid()
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x):
-        # x shape: [N, C, T, V]
-        x_pooled = torch.mean(x, dim=3)  # [N, C, T]
-        att = self.sigmoid(self.mlp(x_pooled))  # [N, C, T]
-        att = self.dropout(att)  # ⬅ Dropout 加在注意力 mask 上
-        att = att.unsqueeze(-1).expand_as(x)  # [N, C, T, V]
-        # print("temporal_att:", att.mean().item(), att.std().item())
-        return att
+        self.ft = nn.Conv1d(in_channels=input_channels, 
+                           out_channels=1, 
+                           kernel_size=1)        
+    def forward(self, Xin):
+        # AvgPool - 对所有关节特征进行平均
+        avg_pooled = torch.mean(Xin, dim=3)  # [B, Cin, T]       
+        # ft - 1-D卷积操作
+        conv_out = self.ft(avg_pooled)  # [B, 1, T]       
+        # σ - Sigmoid激活函数
+        At = torch.sigmoid(conv_out).unsqueeze(3)  # [B, 1, T, 1]       
+        return At
 
 class ChannelAttention(nn.Module):
-    def __init__(self, channels, reduction=16,dropout=0.1):
+    """
+    通道注意力模块
+    Ac = σ(Wc1(δ(Wc2(AvgPool(Xin)))))
+    """
+    
+    def __init__(self, input_channels, reduction_ratio=16):
         super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
         
-        # 使用更合理的降维比例
-        hidden_channels = max(channels // reduction, 1)
+        # 计算中间层通道数
+        mid_channels = input_channels // reduction_ratio
         
-        self.shared_mlp = nn.Sequential(
-            nn.Linear(channels, hidden_channels),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_channels, channels)
-        )
-        self.sigmoid = nn.Sigmoid()
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        # x shape: [N, C, T, V]
-        N, C, T, V = x.size()
+        # 可学习权重
+        self.Wc2 = nn.Linear(input_channels, mid_channels, bias=False)  # R^(Cin/r × Cin)
+        self.Wc1 = nn.Linear(mid_channels, input_channels, bias=False)  # R^(Cin × Cin/r)
         
-        # 全局平均池化和最大池化
-        avg_out = self.avg_pool(x).view(N, C)  # [N, C]
-        max_out = self.max_pool(x).view(N, C)  # [N, C]
+    def forward(self, Xin):
+        """
+        输入: Xin → RCin×T×N
+        输出: Ac → RCin×1×1
+        """
+        # AvgPool - 对所有关节和所有帧进行平均
+        avg_pooled = torch.mean(Xin, dim=(2, 3))  # [B, Cin]
         
-        # 通过共享MLP
-        avg_out = self.shared_mlp(avg_out)
-        max_out = self.shared_mlp(max_out)
+        # Wc2 - 第一个线性变换
+        intermediate = self.Wc2(avg_pooled)  # [B, Cin/r]
         
-        # 合并并应用sigmoid
-        out = self.sigmoid(avg_out + max_out)  # [N, C]
-        out = self.dropout(out)  # ⬅ Dropout 加在权重上
+        # δ - ReLU激活函数
+        activated = F.relu(intermediate)  # [B, Cin/r]
         
-        # 扩展到原始维度
-        out = out.view(N, C, 1, 1).expand_as(x)
-        # print("channel_att:", out.mean().item(), out.std().item())
-
-        return out   
+        # Wc1 - 第二个线性变换
+        linear_out = self.Wc1(activated)  # [B, Cin]
+        
+        # σ - Sigmoid激活函数
+        Ac = torch.sigmoid(linear_out).unsqueeze(2).unsqueeze(3)  # [B, Cin, 1, 1]
+        
+        return Ac
 
 class pedMondel(nn.Module):
     # 初始化方法，接受几个参数：
@@ -385,11 +379,11 @@ class TCN_GCN_unit(nn.Module):
         self.tcn1 = unit_tcn(out_channels, out_channels, stride=stride)  
         self.relu = nn.ReLU(inplace=True)
 
-        # # 为不同位置添加不同的dropout层
-        self.gcn_dropout = nn.Dropout(gcn_dropout)           # GCN后的dropout
-        self.attention_dropout = nn.Dropout(attention_dropout) # 通道注意力后的dropout
-        self.tcn_dropout = nn.Dropout(tcn_dropout)           # TCN后的dropout
-        self.final_dropout = nn.Dropout(final_dropout)       # 最后sum+relu后的dropout
+        # # # 为不同位置添加不同的dropout层
+        # self.gcn_dropout = nn.Dropout(gcn_dropout)           # GCN后的dropout
+        # self.attention_dropout = nn.Dropout(attention_dropout) # 通道注意力后的dropout
+        # self.tcn_dropout = nn.Dropout(tcn_dropout)           # TCN后的dropout
+        # self.final_dropout = nn.Dropout(final_dropout)       # 最后sum+relu后的dropout
 
         if not residual:
             self.residual = lambda x: 0
@@ -403,8 +397,8 @@ class TCN_GCN_unit(nn.Module):
     def forward(self, x):
         # 1. 先应用GCN
         gcn_out = self.gcn1(x)  
-        # # 在GCN后添加dropout（较低的dropout率，保持更多信息）
-        gcn_out = self.gcn_dropout(gcn_out)
+        # # # 在GCN后添加dropout（较低的dropout率，保持更多信息）
+        # gcn_out = self.gcn_dropout(gcn_out)
         
         # 2. 然后依次应用三个注意力模块
         # 空间注意力
@@ -418,16 +412,16 @@ class TCN_GCN_unit(nn.Module):
         # 通道注意力
         channel_att = self.channel_attention(gcn_out)
         gcn_out = gcn_out * channel_att
-        # # 在通道注意力后添加dropout（中等dropout率）
-        gcn_out = self.attention_dropout(gcn_out)
+        #  在通道注意力后添加dropout（中等dropout率）
+        # gcn_out = self.attention_dropout(gcn_out)
 
         # 3. 最后应用TCN
         y = self.tcn1(gcn_out)
-        # # 在TCN后添加dropout（较高的dropout率，防止过拟合）
-        y = self.tcn_dropout(y)
+        # # # 在TCN后添加dropout（较高的dropout率，防止过拟合）
+        # y = self.tcn_dropout(y)
         
         # 添加残差连接并应用ReLU
         y = self.relu(y + self.residual(x))
-        # # 在最后的sum+relu后添加dropout（较低的dropout率，保持输出稳定）
-        y = self.final_dropout(y)
+        # # # 在最后的sum+relu后添加dropout（较低的dropout率，保持输出稳定）
+        # y = self.final_dropout(y)
         return y 
