@@ -118,10 +118,6 @@ class LitPedGraph(pl.LightningModule):
         y_onehot.scatter_(1, y.long(), 1)
         loss = F.binary_cross_entropy_with_logits(logits, y_onehot, weight=w)
 
-
-        # 使用 focal loss
-        loss = self.loss_fn(logits, y_onehot)
-
         preds = logits.softmax(1).argmax(1)
         #acc = accuracy(preds.view(-1).long(), y.view(-1).long())
         acc = accuracy(preds.view(-1).long(), y.view(-1).long(), task='multiclass', num_classes=3)
@@ -131,24 +127,24 @@ class LitPedGraph(pl.LightningModule):
         self.log('test_acc', acc * 100.0, prog_bar=True)
         return loss
 
-    def configure_optimizers(self):
-        optm = torch.optim.AdamW(self.parameters(), lr=0.005, weight_decay=1e-3)
-        def lr_lambda(current_step):
-            progress = min(current_step / self.total_steps, 1.0)
-            return 1.0 - progress * (1.0 - (0.001 / 0.005))  # 从 0.005 衰减到 0.001
-        lr_scheduler = {
-            'scheduler': torch.optim.lr_scheduler.LambdaLR(optm, lr_lambda),
-            'interval': 'step',
-            'frequency': 1,
-            'name': 'linear_lr_decay',
-        }
-        return [optm], [lr_scheduler]
     # def configure_optimizers(self):
-    #     optm = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-3)
-    #     lr_scheduler = {'name':'OneCycleLR', 'scheduler': 
-    #     torch.optim.lr_scheduler.OneCycleLR(optm, max_lr=self.lr, div_factor=10.0, total_steps=self.total_steps, verbose=False),
-    #     'interval': 'step', 'frequency': 1,}
+    #     optm = torch.optim.AdamW(self.parameters(), lr=0.005, weight_decay=1e-3)
+    #     def lr_lambda(current_step):
+    #         progress = min(current_step / self.total_steps, 1.0)
+    #         return 1.0 - progress * (1.0 - (0.001 / 0.005))  # 从 0.005 衰减到 0.001
+    #     lr_scheduler = {
+    #         'scheduler': torch.optim.lr_scheduler.LambdaLR(optm, lr_lambda),
+    #         'interval': 'step',
+    #         'frequency': 1,
+    #         'name': 'linear_lr_decay',
+    #     }
     #     return [optm], [lr_scheduler]
+    def configure_optimizers(self):
+        optm = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-3)
+        lr_scheduler = {'name':'OneCycleLR', 'scheduler': 
+        torch.optim.lr_scheduler.OneCycleLR(optm, max_lr=self.lr, div_factor=10.0, final_div_factor=1e4, total_steps=self.total_steps, verbose=False),
+        'interval': 'step', 'frequency': 1,}
+        return [optm], [lr_scheduler]
 
 
 def data_loader(args):
