@@ -191,7 +191,7 @@ def main(args):
     stats_fn.stats(average_precision_score, False)
 
     print(f'balance data: {args.balance}, bh: {args.bh}, last2: {args.last2}, Model: ' + args.ckpt.split('/')[-2])
-    print(stats_fn.results)
+    print(stats_fn.results.to_string())
     print(np.mean((pedgraph_pred_all[:, 0]>0.5) == stats_fn.one_hot_y[:, 0]))
     print(np.mean((pedgraph_pred_all[:, 1]>0.5) == stats_fn.one_hot_y[:, 1]))
     print(np.mean((pedgraph_pred_all[:, 2]>0.5) == stats_fn.one_hot_y[:, 2]))
