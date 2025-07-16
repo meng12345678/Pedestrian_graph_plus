@@ -179,11 +179,14 @@ def main(args):
     mymodel = LitPedGraph(args, len(tr))
     if not Path(args.logdir).is_dir():
         os.mkdir(args.logdir)
+        
     checkpoint_callback = ModelCheckpoint(
-        dirpath=args.logdir, 
-        monitor='val_acc', 
-        save_top_k=5,
-        filename='pie23-{epoch:02d}-{val_acc:.3f}', mode='max', save_weights_only=True)
+        dirpath=args.logdir,
+        filename='epoch_{epoch:02d}',   # 你可以改成其他格式
+        save_top_k=-1,                  # -1 表示保存所有 epoch
+        every_n_epochs=1,               # 每个 epoch 都保存
+        save_weights_only=True         # 不设置为 True，这样保存完整 ckpt
+    )
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
     trainer = pl.Trainer(
