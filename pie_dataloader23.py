@@ -57,7 +57,7 @@ class DataSet(data.Dataset):
         ped_ids = list(filter(filt_list, self.data_list))
 
         self.ped_data = {}
-        ped_ids = ped_ids[:1000]
+        # ped_ids = ped_ids[:1000]
 
         for ped_id in tqdm(ped_ids, desc=f'loading {data_set} data in memory'):
 
