@@ -90,7 +90,14 @@ class musterModel(nn.Module):
 
         self.model = pedMondel(args.frames, vel=args.velocity, seg=args.seg, h3d=args.H3D, n_clss=3)
         ckpt = torch.load(args.ckpt, map_location=args.device)
-        self.model.load_state_dict(ckpt)
+        if "state_dict" in ckpt:
+            # 只提取模型的 state_dict 并去除前缀 model.
+            state_dict = ckpt["state_dict"]
+            cleaned_dict = {k.replace("model.", ""): v for k, v in state_dict.items() if k.startswith("model.")}
+            self.model.load_state_dict(cleaned_dict, strict=True)
+        else:
+            # 普通 .pth 情况
+            self.model.load_state_dict(ckpt, strict=True)
         self.model = self.model.to(args.device)
         self.model.eval()
     
